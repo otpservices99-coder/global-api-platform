@@ -4,143 +4,154 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 
+// =========================
 // REGISTER USER
+// =========================
 
-const registerUser = async (req,res)=>{
+const registerUser = async (req, res) => {
 
-try{
+try {
+
+const projectKey = req.headers["x-api-key"];
 
 const {
-projectKey,
 username,
 email,
 password
-}=req.body;
+} = req.body;
 
 
+// Validate API Key
 
-if(!projectKey || !username || !email || !password){
+if (!projectKey) {
 
 return res.status(400).json({
 
-success:false,
-message:"projectKey, username, email and password are required"
+success: false,
+message: "Project API key is missing"
 
 });
 
 }
 
 
+// Validate Input
+
+if (!username || !email || !password) {
+
+return res.status(400).json({
+
+success: false,
+message: "Username, email and password are required"
+
+});
+
+}
+
+
+// Find Project
 
 const project = await Project.findOne({
 
-status:"active",
+status: "active",
 
-apiKeys:{
-$elemMatch:{
-key:projectKey,
-status:"active"
+apiKeys: {
+$elemMatch: {
+key: projectKey,
+status: "active"
 }
 }
 
 });
 
 
-
-if(!project){
+if (!project) {
 
 return res.status(401).json({
 
-success:false,
-message:"Invalid project key"
+success: false,
+message: "Invalid project API key"
 
 });
 
 }
 
 
+// Check if user already exists INSIDE this project
 
-const existingUser =
-await User.findOne({
+const existingUser = await User.findOne({
 
-$or:[
-{
-email
-},
-{
-username
-}
+project: project._id,
+
+$or: [
+{ email },
+{ username }
 ]
 
 });
 
 
-
-if(existingUser){
+if (existingUser) {
 
 return res.status(400).json({
 
-success:false,
-message:"Username or email already exists"
+success: false,
+message: "Username or email already exists"
 
 });
 
 }
 
 
+// Hash Password
 
-const hashedPassword =
-await bcrypt.hash(
-password,
-10
-);
+const hashedPassword = await bcrypt.hash(password, 10);
 
 
+// Create User
 
-const user =
-await User.create({
+const user = await User.create({
 
-project:project._id,
+project: project._id,
 
 username,
 
 email,
 
-password:hashedPassword
+password: hashedPassword
 
 });
 
 
+// Success
 
 res.status(201).json({
 
-success:true,
+success: true,
 
-message:"Account created successfully",
+message: "Account created successfully",
 
-user:{
+user: {
 
-id:user._id,
+id: user._id,
 
-username:user.username,
+username: user.username,
 
-email:user.email,
+email: user.email,
 
-project:project.name
+project: project.name
 
 }
 
 });
 
-
-
-}catch(error){
+} catch (error) {
 
 res.status(500).json({
 
-success:false,
+success: false,
 
-message:error.message
+message: error.message
 
 });
 
@@ -151,76 +162,125 @@ message:error.message
 
 
 
+// =========================
 // LOGIN USER
+// =========================
 
-const loginUser = async(req,res)=>{
+const loginUser = async (req, res) => {
 
-try{
+try {
 
+const projectKey = req.headers["x-api-key"];
 
 const {
 email,
 password
-}=req.body;
+} = req.body;
 
 
+// Validate API Key
 
-const user =
-await User.findOne({
-email
-});
-
-
-
-if(!user){
+if (!projectKey) {
 
 return res.status(400).json({
 
-success:false,
-
-message:"Invalid email or password"
+success: false,
+message: "Project API key is missing"
 
 });
 
 }
 
 
+// Find Project
 
-const validPassword =
-await bcrypt.compare(
+const project = await Project.findOne({
+
+status: "active",
+
+apiKeys: {
+$elemMatch: {
+key: projectKey,
+status: "active"
+}
+}
+
+});
+
+
+if (!project) {
+
+return res.status(401).json({
+
+success: false,
+message: "Invalid project API key"
+
+});
+
+}
+
+
+// Find User ONLY inside this project
+
+const user = await User.findOne({
+
+email,
+
+project: project._id
+
+});
+
+
+if (!user) {
+
+return res.status(400).json({
+
+success: false,
+
+message: "Invalid email or password"
+
+});
+
+}
+
+
+// Compare Password
+
+const validPassword = await bcrypt.compare(
+
 password,
+
 user.password
+
 );
 
 
-
-if(!validPassword){
+if (!validPassword) {
 
 return res.status(400).json({
 
-success:false,
+success: false,
 
-message:"Invalid email or password"
+message: "Invalid email or password"
 
 });
 
 }
 
 
+// Generate JWT
 
-
-const token =
-jwt.sign(
+const token = jwt.sign(
 
 {
 
-id:user._id,
+id: user._id,
 
-role:user.role,
+role: user.role,
 
-platformRole:user.platformRole,
+platformRole: user.platformRole,
 
-project:user.project
+project: user.project
 
 },
 
@@ -228,69 +288,64 @@ process.env.JWT_SECRET,
 
 {
 
-expiresIn:"7d"
+expiresIn: "7d"
 
 }
 
 );
 
 
-
+// Update Login Time
 
 user.lastLogin = new Date();
 
 await user.save();
 
 
+// Success
 
 res.json({
 
-success:true,
+success: true,
 
-message:"Login successful",
+message: "Login successful",
 
 token,
 
-user:{
+user: {
 
-id:user._id,
+id: user._id,
 
-username:user.username,
+username: user.username,
 
-email:user.email,
+email: user.email,
 
-role:user.role,
+role: user.role,
 
-platformRole:user.platformRole,
+platformRole: user.platformRole,
 
-project:user.project
+project: user.project
 
 }
 
 });
 
-
-
-}catch(error){
-
+} catch (error) {
 
 res.status(500).json({
 
-success:false,
+success: false,
 
-message:error.message
+message: error.message
 
 });
 
 }
-
 
 };
 
 
-
-
-module.exports={
+module.exports = {
 
 registerUser,
 
