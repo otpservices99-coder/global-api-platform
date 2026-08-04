@@ -20,8 +20,8 @@ const swaggerSpec = swaggerJsdoc({
         servers: [
 
             {
-                url: "https://global-api-platform.onrender.com/api-docs",
-                description: "Development Server"
+                url: "https://global-api-platform.onrender.com",
+                description: "Production Server"
             }
 
         ],
