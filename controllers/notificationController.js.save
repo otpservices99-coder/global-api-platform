@@ -1,0 +1,92 @@
+const Notification = require("../models/Notification");
+const User = require("../models/User");
+
+const sendToUser = async (req, res) => {
+
+    try {
+
+        const { userId, title, message, type } = req.body;
+
+        const user = await User.findOne({
+            _id: userId,
+            project: req.project._id
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        const notification = await Notification.create({
+
+            project: req.project._id,
+
+            user: user._id,
+
+            title,
+
+            message,
+
+            type: type || "info"
+
+        });
+
+        res.json({
+            success: true,
+            data: notification
+        });
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            message: err.message
+        });
+
+    }
+
+};
+
+const broadcast = async (req, res) => {
+
+    try {
+
+        const { title, message, type } = req.body;
+
+        const users = await User.find({
+            project: req.project._id
+        });
+
+        const notifications = users.map(user => ({
+            project: req.project._id,
+            user: user._id,
+            title,
+            message,
+            type: type || "info"
+        }));
+
+        await Notification.insertMany(notifications);
+
+        res.json({
+            success: true,
+            sent: notifications.length
+        });
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            message: err.message
+        });
+
+    }
+
+};
+
+
+module.exports = {
+    sendToUser,
+    broadcast
+};
