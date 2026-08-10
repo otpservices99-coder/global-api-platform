@@ -1,117 +1,76 @@
 const Action = require("../models/Action");
 
 const {
-    register
-}=require("../handlers");
+    register,
+    list
+} = require("../handlers");
 
 
+const loadActions = async (projectId) => {
 
-/*
-    Dynamic Action Loader
+    try {
 
-    Reads enabled actions from database
-    and registers them.
-
-*/
-
-
-const loadActions = async(projectId)=>{
+        const actions = await Action.find({
+            project: projectId,
+            enabled: true
+        });
 
 
-try{
+        const registeredHandlers = new Set(list());
 
 
-const actions = await Action.find({
+        for (const action of actions) {
 
-project:projectId,
-
-enabled:true
-
-});
+            if (registeredHandlers.has(action.name)) {
+                continue;
+            }
 
 
+            register(
+                action.name,
 
-for(const action of actions){
+                async (context) => {
 
+                    console.log(
+                        "Dynamic action:",
+                        action.name
+                    );
 
-    /*
-        Temporary generic executor.
-
-        Later this can connect to:
-        external APIs,
-        scripts,
-        workflows,
-        webhooks,
-        etc.
-
-        The registry stays unchanged.
-    */
+                    console.log(
+                        "Config:",
+                        action.config
+                    );
 
 
-    register(
+                    return {
+                        success: true,
+                        action: action.name
+                    };
 
-        action.name,
-
-        async(context)=>{
-
-
-            console.log(
-                "Dynamic action:",
-                action.name
+                }
             );
 
 
-            console.log(
-                "Config:",
-                action.config
-            );
-
-
-            console.log(
-                "Context:",
-                context
-            );
-
-
-            return {
-
-                success:true,
-
-                action:action.name
-
-            };
-
+            registeredHandlers.add(action.name);
 
         }
 
-    );
+
+        return actions;
 
 
-}
+    } catch (error) {
 
+        console.error(
+            "Action loader error:",
+            error.message
+        );
 
+        throw error;
 
-return actions;
-
-
-
-}catch(error){
-
-
-console.error(
-"Action loader error:",
-error.message
-);
-
-
-throw error;
-
-
-}
-
+    }
 
 };
-
 
 
 module.exports = {

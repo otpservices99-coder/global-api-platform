@@ -22,31 +22,87 @@ const getAdminDashboard = async (req,res)=>{
         });
 
 
-        const totalWalletBalance = await Wallet.aggregate([
+        const suspendedUsers = await User.countDocuments({
+            project: projectId,
+            status:"suspended"
+        });
+
+
+        const walletStats = await Wallet.aggregate([
+
             {
                 $match:{
                     project: projectId
                 }
             },
+
             {
                 $group:{
                     _id:null,
-                    total:{
+
+                    totalBalance:{
                         $sum:"$balance"
+                    },
+
+                    totalPending:{
+                        $sum:"$pendingBalance"
+                    },
+
+                    totalEarned:{
+                        $sum:"$totalEarned"
+                    },
+
+                    totalWithdrawn:{
+                        $sum:"$totalWithdrawn"
                     }
+
                 }
             }
+
         ]);
 
 
-        const pendingWithdrawals = await Withdrawal.countDocuments({
-            project: projectId,
-            status:"pending"
+
+        const withdrawalStats = await Withdrawal.aggregate([
+
+            {
+                $match:{
+                    project: projectId
+                }
+            },
+
+            {
+                $group:{
+
+                    _id:"$status",
+
+                    count:{
+                        $sum:1
+                    },
+
+                    amount:{
+                        $sum:"$amount"
+                    }
+
+                }
+
+            }
+
+        ]);
+
+
+
+        const totalTransactions =
+        await Transaction.countDocuments({
+            project:projectId
         });
 
 
+
         const recentUsers = await User.find({
-            project: projectId
+
+            project:projectId
+
         })
         .select("-password")
         .sort({
@@ -56,8 +112,11 @@ const getAdminDashboard = async (req,res)=>{
 
 
 
-        const recentTransactions = await Transaction.find({
-            project: projectId
+        const recentTransactions =
+        await Transaction.find({
+
+            project:projectId
+
         })
         .populate(
             "user",
@@ -70,22 +129,94 @@ const getAdminDashboard = async (req,res)=>{
 
 
 
+        const withdrawals = {
+
+            pending:{
+                count:0,
+                amount:0
+            },
+
+            approved:{
+                count:0,
+                amount:0
+            },
+
+            rejected:{
+                count:0,
+                amount:0
+            }
+
+        };
+
+
+
+        withdrawalStats.forEach(item=>{
+
+            if(withdrawals[item._id]){
+
+                withdrawals[item._id]={
+                    count:item.count,
+                    amount:item.amount
+                };
+
+            }
+
+        });
+
+
+
+        const wallet = walletStats[0] || {
+
+            totalBalance:0,
+            totalPending:0,
+            totalEarned:0,
+            totalWithdrawn:0
+
+        };
+
+
+
         res.json({
 
             success:true,
 
             data:{
 
-                totalUsers,
+                users:{
 
-                activeUsers,
+                    total:totalUsers,
 
-                totalWalletBalance:
-                totalWalletBalance[0]?.total || 0,
+                    active:activeUsers,
 
-                pendingWithdrawals,
+                    suspended:suspendedUsers
+
+                },
+
+
+                wallet:{
+
+                    balance:wallet.totalBalance,
+
+                    pendingBalance:
+                    wallet.totalPending,
+
+                    totalEarned:
+                    wallet.totalEarned,
+
+                    totalWithdrawn:
+                    wallet.totalWithdrawn
+
+                },
+
+
+                withdrawals,
+
+
+                totalTransactions,
+
 
                 recentUsers,
+
 
                 recentTransactions
 
@@ -108,6 +239,7 @@ const getAdminDashboard = async (req,res)=>{
     }
 
 };
+
 
 
 module.exports={

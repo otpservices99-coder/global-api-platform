@@ -1,232 +1,114 @@
 const Notification = require("../models/Notification");
-const User = require("../models/User");
 
 
+// GET USER NOTIFICATIONS
+const getNotifications = async(req,res)=>{
 
-const sendToUser = async (req,res)=>{
+try{
 
-    try{
+const notifications =
+await Notification.find({
 
+project:req.project._id,
+user:req.user.id
 
-        const {
-            userId,
-            title,
-            message,
-            type
-        } = req.body;
-
-
-
-        const user = await User.findOne({
-
-            _id:userId,
-
-            project:req.project._id
-
-        });
+})
+.sort({
+createdAt:-1
+});
 
 
+res.json({
 
-        if(!user){
+success:true,
+data:notifications
 
-            return res.status(404).json({
-
-                success:false,
-
-                message:"User not found"
-
-            });
-
-        }
+});
 
 
+}catch(error){
 
-        const notification = await Notification.create({
+res.status(500).json({
 
-            project:req.project._id,
+success:false,
+message:error.message
 
-            user:user._id,
+});
 
-            audience:"user",
-
-            title,
-
-            message,
-
-            type:type || "info"
-
-        });
-
-
-
-        res.json({
-
-            success:true,
-
-            data:notification
-
-        });
-
-
-
-    }catch(error){
-
-
-        res.status(500).json({
-
-            success:false,
-
-            message:error.message
-
-        });
-
-
-    }
-
+}
 
 };
 
 
 
 
+// MARK AS READ
+const markRead = async(req,res)=>{
+
+try{
+
+
+const notification =
+await Notification.findOneAndUpdate(
+
+{
+_id:req.params.id,
+project:req.project._id,
+user:req.user.id
+},
+
+{
+read:true
+},
+
+{
+new:true
+}
+
+);
 
 
 
-const broadcast = async(req,res)=>{
+if(!notification){
 
-    try{
+return res.status(404).json({
 
+success:false,
+message:"Notification not found"
 
-        const {
-            title,
-            message,
-            type
-        } = req.body;
+});
 
-
-
-        const notification = await Notification.create({
-
-            project:req.project._id,
-
-            user:null,
-
-            audience:"all",
-
-            title,
-
-            message,
-
-            type:type || "info"
-
-        });
+}
 
 
 
-        res.json({
+res.json({
 
-            success:true,
+success:true,
+data:notification
 
-            message:"Broadcast created",
-
-            data:notification
-
-        });
+});
 
 
+}catch(error){
 
-    }catch(error){
+res.status(500).json({
 
+success:false,
+message:error.message
 
-        res.status(500).json({
+});
 
-            success:false,
-
-            message:error.message
-
-        });
-
-
-    }
+}
 
 
 };
 
 
 
+module.exports={
 
-
-
-
-
-const getMyNotifications = async(req,res)=>{
-
-    try{
-
-
-        const notifications = await Notification.find({
-
-            project:req.project._id,
-
-            $or:[
-
-                {
-                    user:req.user.id
-                },
-
-                {
-                    audience:"all"
-                }
-
-            ]
-
-        })
-
-        .sort({
-
-            createdAt:-1
-
-        });
-
-
-
-        res.json({
-
-            success:true,
-
-            data:notifications
-
-        });
-
-
-
-    }catch(error){
-
-
-        res.status(500).json({
-
-            success:false,
-
-            message:error.message
-
-        });
-
-
-    }
-
-
-};
-
-
-
-
-
-module.exports = {
-
-    sendToUser,
-
-    broadcast,
-
-    getMyNotifications
+getNotifications,
+markRead
 
 };

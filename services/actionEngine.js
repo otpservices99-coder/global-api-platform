@@ -1,69 +1,188 @@
+const Action = require("../models/Action");
+
 const {
     execute
-}=require("../handlers");
-
+} = require("../handlers");
 
 const {
     loadActions
-}=require("./actionLoader");
+} = require("./actionLoader");
+
+const audit = require("./auditService");
 
 
 
-const processActions = async(event, actions)=>{
+const processAction = async(context)=>{
 
 
-    await loadActions(
-        event.project
-    );
+try{
+
+
+const {
+
+projectId,
+
+action,
+
+user,
+
+actorId,
+
+data = {},
+
+req
+
+}=context;
 
 
 
-    for(const action of actions){
+await loadActions(projectId);
 
 
-        try{
+
+const actionRecord = await Action.findOne({
+
+project:projectId,
+
+name:action,
+
+enabled:true
+
+});
 
 
-            const result = await execute(
 
-                action.handler,
+if(!actionRecord){
 
-                {
+return {
 
-                    event,
+success:false,
 
-                    data:action.data || {}
+message:"Action not found",
 
-                }
+action
 
-            );
+};
 
-
-            console.log(
-                "Action result:",
-                result
-            );
+}
 
 
-        }catch(error){
+
+const result = await execute(
+
+action,
+
+{
+
+projectId,
+
+userId:user?._id || null,
+
+actorId,
+
+data,
+
+req
+
+}
+
+);
 
 
-            console.error(
-                "Action error:",
-                error.message
-            );
+
+await audit.log({
+
+project:projectId,
+
+actor:actorId,
+
+user:data.userId || user?._id || null,
+
+action,
+
+resource:actionRecord.config?.resource || "",
+
+metadata:data,
+
+req
+
+});
 
 
-        }
+
+return result;
 
 
-    }
+
+}catch(error){
+
+
+console.error(
+
+"Action execution error:",
+
+error.message
+
+);
+
+
+
+return {
+
+success:false,
+
+message:error.message
+
+};
+
+
+}
 
 
 };
 
 
 
+
+
+const processActions = async(event, actions)=>{
+
+
+for(const item of actions){
+
+
+await processAction({
+
+projectId:event.project,
+
+action:item.handler,
+
+user:event.userId ? {
+_id:event.userId
+}:null,
+
+actorId:event.userId || null,
+
+data:item.data || event.data || {},
+
+event
+
+});
+
+
+}
+
+
+};
+
+
+
+
+
 module.exports = {
-    processActions
+
+processAction,
+
+processActions
+
 };

@@ -1,39 +1,60 @@
 const AuditLog = require("../models/AuditLog");
 
+
 class AuditService {
 
-    async log({
-        project,
-        actor,
-        user = null,
-        action,
-        resource = "",
-        metadata = {},
-        req = null
-    }) {
 
-        return await AuditLog.create({
+async log({
 
-            project,
+project,
 
-            actor,
+actor,
 
-            user,
+user = null,
 
-            action,
+action,
 
-            resource,
+resource = "",
 
-            metadata,
+recordId = null,
 
-            ip: req?.ip || "",
+metadata = {},
 
-            userAgent: req?.headers["user-agent"] || ""
+req = null
 
-        });
+}){
 
-    }
+
+return await AuditLog.create({
+
+project,
+
+user,
+
+action,
+
+resource,
+
+recordId,
+
+details:{
+
+actor,
+
+...metadata
+
+},
+
+ip:req?.ip || null
+
+});
+
 
 }
+
+
+
+}
+
 
 module.exports = new AuditService();

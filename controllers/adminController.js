@@ -1,488 +1,477 @@
 const User = require("../models/User");
-const platform = require("../services/platformService");
 const audit = require("../services/auditService");
+
+const {
+    processAction
+} = require("../services/actionEngine");
+
 
 
 // Get all users
-const getUsers = async (req,res)=>{
 
-    try{
+const getUsers = async(req,res)=>{
 
-        const users = await User.find({
-            project:req.project._id
-        }).select("-password");
+try{
 
+const users = await User.find({
 
-        res.json({
-            success:true,
-            total:users.length,
-            data:users
-        });
+project:req.project._id
+
+}).select("-password");
 
 
-    }catch(error){
+res.json({
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+success:true,
 
-    }
+total:users.length,
+
+data:users
+
+});
+
+
+}catch(error){
+
+res.status(500).json({
+
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
+
 
 
 
 // Get user by ID
+
 const getUserById = async(req,res)=>{
 
-    try{
+try{
 
-        const user = await User.findOne({
+const user = await User.findOne({
 
-            _id:req.params.id,
+_id:req.params.id,
 
-            project:req.project._id
+project:req.project._id
 
-        }).select("-password");
-
-
-        if(!user){
-
-            return res.status(404).json({
-                success:false,
-                message:"User not found"
-            });
-
-        }
+}).select("-password");
 
 
-        res.json({
-            success:true,
-            data:user
-        });
+if(!user){
+
+return res.status(404).json({
+
+success:false,
+
+message:"User not found"
+
+});
+
+}
 
 
-    }catch(error){
+res.json({
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+success:true,
 
-    }
+data:user
+
+});
+
+
+}catch(error){
+
+res.status(500).json({
+
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
+
 
 
 
 // Credit user wallet
+
 const creditUser = async(req,res)=>{
 
-    try{
-
-        const {amount,description}=req.body;
+try{
 
 
-        const user=await User.findOne({
-
-            _id:req.params.id,
-
-            project:req.project._id
-
-        });
-
-
-        if(!user){
-
-            return res.status(404).json({
-                success:false,
-                message:"User not found"
-            });
-
-        }
-
-
-        await platform.addBalance(
-
-            req.project._id,
-
-            user._id,
-
-            Number(amount),
-
-            description || "Admin Credit"
-
-        );
+const {
+amount,
+description
+}=req.body;
 
 
 
-        await platform.notify(
+const user = await User.findOne({
 
-            req.project._id,
+_id:req.params.id,
 
-            user._id,
+project:req.project._id
 
-            "Wallet Credited",
-
-            `Your wallet has been credited with ${amount}`
-
-        );
+});
 
 
+if(!user){
 
-        await audit.log({
+return res.status(404).json({
 
-            project:req.project._id,
+success:false,
 
-            actor:req.user._id,
+message:"User not found"
 
-            user:user._id,
+});
 
-            action:"wallet.credit",
-
-            resource:"wallet",
-
-            metadata:{
-                amount,
-                description
-            },
-
-            req
-
-        });
+}
 
 
 
-        res.json({
+const result = await processAction({
 
-            success:true,
+projectId:req.project._id,
 
-            message:"Wallet credited successfully"
+action:"wallet.credit",
 
-        });
+user:req.user,
+
+actorId:req.user._id,
+
+data:{
+
+userId:user._id,
+
+amount,
+
+description
+
+},
+
+req
+
+});
 
 
 
-    }catch(error){
+if(!result.success){
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+return res.status(400).json(result);
 
-    }
+}
+
+
+
+res.json({
+
+success:true,
+
+message:"Wallet credited successfully",
+
+data:result
+
+});
+
+
+
+}catch(error){
+
+res.status(500).json({
+
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
+
 
 
 
 // Debit user wallet
+
 const debitUser = async(req,res)=>{
 
-    try{
-
-        const {amount,description}=req.body;
+try{
 
 
-        const user=await User.findOne({
-
-            _id:req.params.id,
-
-            project:req.project._id
-
-        });
+const {
+amount,
+description
+}=req.body;
 
 
 
-        if(!user){
+const user = await User.findOne({
 
-            return res.status(404).json({
-                success:false,
-                message:"User not found"
-            });
+_id:req.params.id,
 
-        }
+project:req.project._id
 
+});
 
 
-        await platform.removeBalance(
+if(!user){
 
-            req.project._id,
+return res.status(404).json({
 
-            user._id,
+success:false,
 
-            Number(amount),
+message:"User not found"
 
-            description || "Admin Debit"
+});
 
-        );
+}
 
 
 
-        await platform.notify(
+const result = await processAction({
 
-            req.project._id,
+projectId:req.project._id,
 
-            user._id,
+action:"wallet.debit",
 
-            "Wallet Debited",
+user:req.user,
 
-            `Your wallet has been debited by ${amount}`
+actorId:req.user._id,
 
-        );
+data:{
 
+userId:user._id,
 
+amount,
 
-        await audit.log({
+description
 
-            project:req.project._id,
+},
 
-            actor:req.user._id,
+req
 
-            user:user._id,
-
-            action:"wallet.debit",
-
-            resource:"wallet",
-
-            metadata:{
-                amount,
-                description
-            },
-
-            req
-
-        });
+});
 
 
 
-        res.json({
+if(!result.success){
 
-            success:true,
+return res.status(400).json(result);
 
-            message:"Wallet debited successfully"
-
-        });
+}
 
 
 
-    }catch(error){
+res.json({
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+success:true,
 
-    }
+message:"Wallet debited successfully",
+
+data:result
+
+});
+
+
+
+}catch(error){
+
+res.status(500).json({
+
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
+
 
 
 
 // Update user status
+
 const updateUserStatus = async(req,res)=>{
 
-    try{
-
-        const {status}=req.body;
+try{
 
 
-        const allowed=[
-            "active",
-            "suspended",
-            "banned"
-        ];
+const {
+status
+}=req.body;
 
 
-        if(!allowed.includes(status)){
+const user = await User.findOne({
 
-            return res.status(400).json({
-                success:false,
-                message:"Invalid status"
-            });
+_id:req.params.id,
 
-        }
+project:req.project._id
 
+});
 
 
-        const user=await User.findOne({
+if(!user){
 
-            _id:req.params.id,
+return res.status(404).json({
 
-            project:req.project._id
+success:false,
 
-        });
+message:"User not found"
+
+});
+
+}
 
 
 
-        if(!user){
+const result = await processAction({
 
-            return res.status(404).json({
-                success:false,
-                message:"User not found"
-            });
+projectId:req.project._id,
 
-        }
+action:"user.status_update",
 
+user:req.user,
 
+actorId:req.user._id,
 
-        user.status=status;
+data:{
 
-        await user.save();
+userId:user._id,
 
+status
 
+},
 
-        await audit.log({
+req
 
-            project:req.project._id,
-
-            actor:req.user._id,
-
-            user:user._id,
-
-            action:"user.status_update",
-
-            resource:"user",
-
-            metadata:{
-                status
-            },
-
-            req
-
-        });
+});
 
 
 
-        res.json({
+res.json({
 
-            success:true,
+success:true,
 
-            message:"User status updated",
+message:"User status updated",
 
-            data:{
-                status:user.status
-            }
+data:result
 
-        });
+});
 
 
 
-    }catch(error){
+}catch(error){
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+res.status(500).json({
 
-    }
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
 
 
 
+
 // Update user role
+
 const updateUserRole = async(req,res)=>{
 
-    try{
-
-        const {role}=req.body;
+try{
 
 
-        const allowed=[
-
-            "superadmin",
-            "admin",
-            "moderator",
-            "support",
-            "user"
-
-        ];
+const {
+role
+}=req.body;
 
 
-        if(!allowed.includes(role)){
+const user = await User.findOne({
 
-            return res.status(400).json({
-                success:false,
-                message:"Invalid role"
-            });
+_id:req.params.id,
 
-        }
+project:req.project._id
 
+});
 
 
-        const user=await User.findOne({
+if(!user){
 
-            _id:req.params.id,
+return res.status(404).json({
 
-            project:req.project._id
+success:false,
 
-        });
+message:"User not found"
+
+});
+
+}
 
 
 
-        if(!user){
+const result = await processAction({
 
-            return res.status(404).json({
-                success:false,
-                message:"User not found"
-            });
+projectId:req.project._id,
 
-        }
+action:"user.role_update",
 
+user:req.user,
 
+actorId:req.user._id,
 
-        user.role=role;
+data:{
 
-        await user.save();
+userId:user._id,
 
+role
 
+},
 
-        await audit.log({
+req
 
-            project:req.project._id,
-
-            actor:req.user._id,
-
-            user:user._id,
-
-            action:"user.role_update",
-
-            resource:"user",
-
-            metadata:{
-                role
-            },
-
-            req
-
-        });
+});
 
 
 
-        res.json({
+res.json({
 
-            success:true,
+success:true,
 
-            message:"User role updated",
+message:"User role updated",
 
-            data:{
-                role:user.role
-            }
+data:result
 
-        });
+});
 
 
 
-    }catch(error){
+}catch(error){
 
-        res.status(500).json({
-            success:false,
-            message:error.message
-        });
+res.status(500).json({
 
-    }
+success:false,
+
+message:error.message
+
+});
+
+}
 
 };
 
@@ -490,16 +479,16 @@ const updateUserRole = async(req,res)=>{
 
 module.exports={
 
-    getUsers,
+getUsers,
 
-    getUserById,
+getUserById,
 
-    creditUser,
+creditUser,
 
-    debitUser,
+debitUser,
 
-    updateUserStatus,
+updateUserStatus,
 
-    updateUserRole
+updateUserRole
 
 };

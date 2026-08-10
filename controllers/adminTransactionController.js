@@ -2,113 +2,155 @@ const Transaction = require("../models/Transaction");
 
 
 
-const getTransactions = async(req,res)=>{
+const getTransactions = async (req, res) => {
 
-    try{
-
+    try {
 
         const {
-
             type,
-
             user,
-
+            status,
             page = 1,
-
             limit = 20
-
         } = req.query;
 
+
+        const currentPage =
+            Math.max(Number(page) || 1, 1);
+
+
+        const currentLimit =
+            Math.min(
+                Math.max(Number(limit) || 20, 1),
+                100
+            );
 
 
         const filter = {
 
-            project:req.project._id
+            project: req.project._id
 
         };
 
 
+        /*
+         * Filter by transaction type
+         */
 
-        if(type){
+        if (type) {
 
             filter.type = type;
 
         }
 
 
+        /*
+         * Filter by user
+         */
 
-        if(user){
+        if (user) {
 
             filter.user = user;
 
         }
 
 
+        /*
+         * Filter by transaction status
+         */
 
-        const skip = 
-            (Number(page)-1) * Number(limit);
+        if (status) {
 
+            filter.status = status;
 
-
-        const transactions = await Transaction.find(filter)
-
-        .populate(
-            "user",
-            "username email"
-        )
-
-        .sort({
-            createdAt:-1
-        })
-
-        .skip(skip)
-
-        .limit(Number(limit));
+        }
 
 
-
-        const total = await Transaction.countDocuments(
-            filter
-        );
+        const skip =
+            (currentPage - 1) * currentLimit;
 
 
+        /*
+         * Get transactions
+         *
+         * Populate both the user and the
+         * related withdrawal.
+         */
 
-        res.json({
+        const transactions =
+            await Transaction.find(filter)
 
-            success:true,
+                .populate(
+                    "user",
+                    "username email"
+                )
+
+                .populate(
+                    "withdrawal",
+                    "project user amount method account status processedAt processedBy rejectionReason createdAt updatedAt"
+                )
+
+                .sort({
+                    createdAt: -1
+                })
+
+                .skip(skip)
+
+                .limit(currentLimit);
+
+
+        /*
+         * Total transaction count
+         */
+
+        const total =
+            await Transaction.countDocuments(
+                filter
+            );
+
+
+        const pages =
+            Math.ceil(
+                total / currentLimit
+            );
+
+
+        return res.json({
+
+            success: true,
 
             total,
 
-            page:Number(page),
+            page: currentPage,
 
-            pages:Math.ceil(
-                total / Number(limit)
-            ),
+            limit: currentLimit,
 
-            data:transactions
+            pages,
 
-        });
-
-
-
-    }catch(error){
-
-
-        res.status(500).json({
-
-            success:false,
-
-            message:error.message
+            data: transactions
 
         });
 
+
+    } catch (error) {
+
+        console.error(
+            "Admin transaction error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message: error.message
+
+        });
 
     }
 
-
 };
-
-
 
 
 

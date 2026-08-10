@@ -1,139 +1,155 @@
+const fs = require("fs");
+const path = require("path");
+
 const Action = require("../models/Action");
-
-
 
 const registry = {};
 
 
 
+// Register handler
 
-// Register action handler
+const register = (name, handler) => {
 
-const register = (
-name,
-handler
-)=>{
-
-
-registry[name] = handler;
-
+    registry[name] = handler;
 
 };
 
 
 
+// Recursively load handlers
 
+const loadDirectory = (dir) => {
 
-// Execute any action
+    const items = fs.readdirSync(dir);
 
-const execute = async(
-name,
-context
-)=>{
+    for (const item of items) {
 
+        const fullPath = path.join(dir, item);
 
-const action =
-await Action.findOne({
+        const stat = fs.statSync(fullPath);
 
-project:context.projectId,
+        if (stat.isDirectory()) {
 
-name:name,
+            loadDirectory(fullPath);
 
-enabled:true
+            continue;
 
-});
+        }
 
+        if (!item.endsWith(".js")) {
 
+            continue;
 
-if(!action){
+        }
 
+        if (item === "index.js") {
 
-return {
+            continue;
 
-success:false,
+        }
 
-message:"Action not found",
+        const handler = require(fullPath);
 
-action:name
+        if (
+            handler &&
+            handler.name &&
+            typeof handler.execute === "function"
+        ) {
 
-};
+            register(
+                handler.name,
+                handler.execute
+            );
 
+            console.log(
+                "✓ Loaded handler:",
+                handler.name
+            );
 
-}
+        }
 
-
-
-
-const handler =
-registry[name];
-
-
-
-if(!handler){
-
-
-return {
-
-success:false,
-
-message:"Handler not registered",
-
-action:name
-
-};
-
-
-}
-
-
-
-
-
-return await handler(context);
-
-
+    }
 
 };
 
 
 
+loadDirectory(__dirname);
 
 
 
+// Execute Action
 
-// Default generic action
+const execute = async (name, context) => {
 
-register(
-"custom.test",
-async(context)=>{
+    const projectId =
+        context.projectId ||
+        context.project ||
+        context.event?.project;
 
+    const action = await Action.findOne({
 
-console.log(
-"Executing custom.test",
-context
-);
+        project: projectId,
 
+        name,
 
+        enabled: true
 
-return {
+    });
 
-success:true,
+    if (!action) {
 
-action:"custom.test"
+        return {
+
+            success: false,
+
+            message: "Action not found",
+
+            action: name
+
+        };
+
+    }
+
+    const handler = registry[name];
+
+    if (!handler) {
+
+        return {
+
+            success: false,
+
+            message: "Handler not registered",
+
+            action: name
+
+        };
+
+    }
+
+    return await handler({
+
+        ...context,
+
+        actionConfig: action.config
+
+    });
 
 };
 
 
-});
 
-
+const list = () => Object.keys(registry);
 
 
 
 module.exports = {
 
-execute,
+    execute,
 
-register
+    register,
+
+    list
 
 };

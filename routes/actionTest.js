@@ -3,28 +3,57 @@ const express = require("express");
 const router = express.Router();
 
 const protect = require("../middleware/auth");
-const admin = require("../middleware/admin");
 
 const {
-list
-}=require("../handlers");
+    processAction
+} = require("../services/actionEngine");
 
 
 
-router.get(
-"/",
+router.post(
+"/wallet-credit",
 protect,
-admin,
-(req,res)=>{
+async(req,res)=>{
 
 
-res.json({
+try{
 
-success:true,
 
-actions:list()
+const result = await processAction({
+
+projectId:req.user.project,
+
+action:"wallet.credit",
+
+user:req.user,
+
+actorId:req.user._id,
+
+data:req.body,
+
+req
+
 
 });
+
+
+res.json(result);
+
+
+
+}catch(error){
+
+
+res.status(500).json({
+
+success:false,
+
+message:error.message
+
+});
+
+
+}
 
 
 });

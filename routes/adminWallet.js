@@ -6,19 +6,34 @@ const protect = require("../middleware/auth");
 const admin = require("../middleware/admin");
 const validateObjectId = require("../middleware/validateObjectId");
 
-
 const {
-
+    getUserWallet,
     creditUserWallet,
     debitUserWallet,
     getUserTransactions
-
 } = require("../controllers/adminWalletController");
 
 
 
-/**
- * Admin credit wallet
+/*
+ * Get a user's wallet
+ *
+ * GET /api/v1/admin/wallet/:userId
+ */
+router.get(
+    "/:userId",
+    protect,
+    admin,
+    validateObjectId("userId"),
+    getUserWallet
+);
+
+
+
+/*
+ * Credit a user's wallet
+ *
+ * POST /api/v1/admin/wallet/:userId/credit
  */
 router.post(
     "/:userId/credit",
@@ -30,8 +45,10 @@ router.post(
 
 
 
-/**
- * Admin debit wallet
+/*
+ * Debit a user's wallet
+ *
+ * POST /api/v1/admin/wallet/:userId/debit
  */
 router.post(
     "/:userId/debit",
@@ -43,8 +60,10 @@ router.post(
 
 
 
-/**
- * Get user transactions
+/*
+ * Get a user's transactions
+ *
+ * GET /api/v1/admin/wallet/:userId/transactions
  */
 router.get(
     "/:userId/transactions",

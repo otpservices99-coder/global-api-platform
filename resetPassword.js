@@ -1,39 +1,64 @@
 require("dotenv").config();
 
-const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+
+const connectDB = require("./config/database");
+
 const User = require("./models/User");
 
-async function resetPassword() {
-    try {
-        await mongoose.connect(process.env.MONGODB_URI);
 
-        const email = "test@example.com";
-        const newPassword = "Password123!";
+async function run(){
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
+try{
 
-        const user = await User.findOneAndUpdate(
-            { email },
-            { password: hashedPassword },
-            { new: true }
-        );
+await connectDB();
 
-        if (!user) {
-            console.log("User not found");
-            process.exit(0);
-        }
 
-        console.log("Password reset successfully.");
-        console.log("Email:", user.email);
-        console.log("New Password:", newPassword);
+const user = await User.findById(
+"6a6bd90eed39744abd5cdcc2"
+);
 
-        process.exit(0);
 
-    } catch (err) {
-        console.error(err);
-        process.exit(1);
-    }
+if(!user){
+
+console.log("User not found");
+
+process.exit();
+
 }
 
-resetPassword();
+
+const newPassword = "Super2323@";
+
+
+user.password = await bcrypt.hash(
+newPassword,
+10
+);
+
+
+user.platformRole = "super_admin";
+
+
+await user.save();
+
+
+console.log("✅ Password reset successfully");
+console.log("New password:", newPassword);
+
+
+process.exit();
+
+
+}catch(error){
+
+console.error(error);
+
+process.exit(1);
+
+}
+
+}
+
+
+run();

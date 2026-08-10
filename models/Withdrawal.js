@@ -1,43 +1,97 @@
-const mongoose=require("mongoose");
+const mongoose = require("mongoose");
 
-const withdrawalSchema=new mongoose.Schema({
 
-    project:{
-        type:mongoose.Schema.Types.ObjectId,
-        ref:"Project",
-        required:true
+const withdrawalSchema = new mongoose.Schema(
+{
+    project: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Project",
+        required: true,
+        index: true
     },
 
-    user:{
-        type:mongoose.Schema.Types.ObjectId,
-        ref:"User",
-        required:true
+
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+        index: true
     },
 
-    amount:{
-        type:Number,
-        required:true
+
+    amount: {
+        type: Number,
+        required: true,
+        min: 0
     },
 
-    method:String,
 
-    account:String,
+    method: {
+        type: String,
+        required: true,
+        trim: true
+    },
 
-    status:{
-        type:String,
-        enum:[
+
+    account: {
+        type: mongoose.Schema.Types.Mixed,
+        required: true
+    },
+
+
+    status: {
+        type: String,
+        enum: [
             "pending",
             "approved",
             "rejected"
         ],
-        default:"pending"
+        default: "pending",
+        index: true
+    },
+
+
+    processedAt: {
+        type: Date,
+        default: null
+    },
+
+
+    processedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
+    },
+
+
+    rejectionReason: {
+        type: String,
+        default: null
     }
 
-},{
-    timestamps:true
+},
+{
+    timestamps: true
 });
 
-module.exports=mongoose.model(
+
+// Indexes for faster admin queries
+
+withdrawalSchema.index({
+    project: 1,
+    user: 1,
+    createdAt: -1
+});
+
+
+withdrawalSchema.index({
+    project: 1,
+    status: 1,
+    createdAt: -1
+});
+
+
+module.exports = mongoose.model(
     "Withdrawal",
     withdrawalSchema
 );

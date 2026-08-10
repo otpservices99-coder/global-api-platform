@@ -1,10 +1,14 @@
 const Withdrawal = require("../models/Withdrawal");
-const Wallet = require("../models/Wallet");
-const Transaction = require("../models/Transaction");
-const audit = require("../services/auditService");
+
+const {
+    processAction
+} = require("../services/actionEngine");
 
 
+// ============================================================
 // GET ALL WITHDRAWALS
+// ============================================================
+
 const getWithdrawals = async (req, res) => {
 
     try {
@@ -14,6 +18,17 @@ const getWithdrawals = async (req, res) => {
             page = 1,
             limit = 20
         } = req.query;
+
+
+        const pageNumber = Math.max(
+            Number(page) || 1,
+            1
+        );
+
+        const limitNumber = Math.min(
+            Math.max(Number(limit) || 20, 1),
+            100
+        );
 
 
         const query = {
@@ -27,29 +42,36 @@ const getWithdrawals = async (req, res) => {
 
 
         const withdrawals = await Withdrawal.find(query)
+
             .populate(
                 "user",
                 "username email"
             )
+
             .sort({
                 createdAt: -1
             })
-            .skip((page - 1) * limit)
-            .limit(Number(limit));
+
+            .skip(
+                (pageNumber - 1) * limitNumber
+            )
+
+            .limit(limitNumber);
 
 
-        const total = await Withdrawal.countDocuments(query);
+        const total =
+            await Withdrawal.countDocuments(query);
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
             total,
 
-            page: Number(page),
+            page: pageNumber,
 
-            limit: Number(limit),
+            limit: limitNumber,
 
             data: withdrawals
 
@@ -58,7 +80,13 @@ const getWithdrawals = async (req, res) => {
 
     } catch (error) {
 
-        res.status(500).json({
+        console.error(
+            "Get withdrawals error:",
+            error
+        );
+
+
+        return res.status(500).json({
 
             success: false,
 
@@ -72,13 +100,13 @@ const getWithdrawals = async (req, res) => {
 
 
 
-
-
+// ============================================================
 // APPROVE WITHDRAWAL
+// ============================================================
+
 const approveWithdrawal = async (req, res) => {
 
     try {
-
 
         const withdrawal = await Withdrawal.findOne({
 
@@ -102,7 +130,6 @@ const approveWithdrawal = async (req, res) => {
         }
 
 
-
         if (withdrawal.status !== "pending") {
 
             return res.status(400).json({
@@ -116,24 +143,19 @@ const approveWithdrawal = async (req, res) => {
         }
 
 
+        const result = await processAction({
 
-        withdrawal.status = "approved";
+            projectId: req.project._id,
 
-        await withdrawal.save();
+            action: "withdrawal.approve",
 
+            user: {
+                _id: withdrawal.user
+            },
 
+            actorId: req.user._id,
 
-        await audit.log({
-
-            project: req.project._id,
-
-            actor: req.user.id,
-
-            action: "withdrawal.approved",
-
-            resource: "withdrawal",
-
-            metadata: {
+            data: {
 
                 withdrawalId: withdrawal._id
 
@@ -144,22 +166,51 @@ const approveWithdrawal = async (req, res) => {
         });
 
 
+        if (!result?.success) {
 
-        res.json({
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    result?.message ||
+                    "Failed to approve withdrawal"
+
+            });
+
+        }
+
+
+        const updatedWithdrawal =
+            await Withdrawal.findOne({
+
+                _id: withdrawal._id,
+
+                project: req.project._id
+
+            });
+
+
+        return res.json({
 
             success: true,
 
             message: "Withdrawal approved",
 
-            data: withdrawal
+            data: updatedWithdrawal
 
         });
 
 
-
     } catch (error) {
 
-        res.status(500).json({
+        console.error(
+            "Approve withdrawal error:",
+            error
+        );
+
+
+        return res.status(500).json({
 
             success: false,
 
@@ -173,15 +224,13 @@ const approveWithdrawal = async (req, res) => {
 
 
 
-
-
-
-
+// ============================================================
 // REJECT WITHDRAWAL
+// ============================================================
+
 const rejectWithdrawal = async (req, res) => {
 
     try {
-
 
         const withdrawal = await Withdrawal.findOne({
 
@@ -205,7 +254,6 @@ const rejectWithdrawal = async (req, res) => {
         }
 
 
-
         if (withdrawal.status !== "pending") {
 
             return res.status(400).json({
@@ -219,62 +267,29 @@ const rejectWithdrawal = async (req, res) => {
         }
 
 
+        const rejectionReason =
+            req.body?.reason ||
+            req.body?.rejectionReason ||
+            "Withdrawal rejected";
 
-        withdrawal.status = "rejected";
 
-        await withdrawal.save();
+        const result = await processAction({
 
+            projectId: req.project._id,
 
+            action: "withdrawal.reject",
 
-        // Refund wallet balance
-        await Wallet.findOneAndUpdate(
-
-            {
-                project: req.project._id,
-                user: withdrawal.user
+            user: {
+                _id: withdrawal.user
             },
 
-            {
-                $inc: {
-                    balance: withdrawal.amount
-                }
-            }
+            actorId: req.user._id,
 
-        );
+            data: {
 
+                withdrawalId: withdrawal._id,
 
-
-        await Transaction.create({
-
-            project: req.project._id,
-
-            user: withdrawal.user,
-
-            type: "refund",
-
-            amount: withdrawal.amount,
-
-            description: "Rejected withdrawal refund",
-
-            status: "completed"
-
-        });
-
-
-
-        await audit.log({
-
-            project: req.project._id,
-
-            actor: req.user.id,
-
-            action: "withdrawal.rejected",
-
-            resource: "withdrawal",
-
-            metadata: {
-
-                withdrawalId: withdrawal._id
+                rejectionReason
 
             },
 
@@ -283,22 +298,51 @@ const rejectWithdrawal = async (req, res) => {
         });
 
 
+        if (!result?.success) {
 
-        res.json({
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    result?.message ||
+                    "Failed to reject withdrawal"
+
+            });
+
+        }
+
+
+        const updatedWithdrawal =
+            await Withdrawal.findOne({
+
+                _id: withdrawal._id,
+
+                project: req.project._id
+
+            });
+
+
+        return res.json({
 
             success: true,
 
             message: "Withdrawal rejected and refunded",
 
-            data: withdrawal
+            data: updatedWithdrawal
 
         });
 
 
-
     } catch (error) {
 
-        res.status(500).json({
+        console.error(
+            "Reject withdrawal error:",
+            error
+        );
+
+
+        return res.status(500).json({
 
             success: false,
 
@@ -309,8 +353,6 @@ const rejectWithdrawal = async (req, res) => {
     }
 
 };
-
-
 
 
 

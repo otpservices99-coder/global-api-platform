@@ -25,7 +25,8 @@ const {
  * /api/v1/wallet:
  *   get:
  *     summary: Get wallet
- *     tags: [Wallet]
+ *     tags:
+ *       - Wallet
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -37,8 +38,9 @@ const {
  *     responses:
  *       200:
  *         description: Wallet returned
+ *       401:
+ *         description: Unauthorized
  */
-
 router.get(
     "/",
     protect,
@@ -46,13 +48,13 @@ router.get(
 );
 
 
-
 /**
  * @swagger
  * /api/v1/wallet/credit:
  *   post:
  *     summary: Credit wallet
- *     tags: [Wallet]
+ *     tags:
+ *       - Wallet
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -67,6 +69,8 @@ router.get(
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - amount
  *             properties:
  *               amount:
  *                 type: number
@@ -75,8 +79,11 @@ router.get(
  *     responses:
  *       200:
  *         description: Wallet credited
+ *       400:
+ *         description: Invalid request
+ *       401:
+ *         description: Unauthorized
  */
-
 router.post(
     "/credit",
     protect,
@@ -84,13 +91,13 @@ router.post(
 );
 
 
-
 /**
  * @swagger
  * /api/v1/wallet/debit:
  *   post:
  *     summary: Debit wallet
- *     tags: [Wallet]
+ *     tags:
+ *       - Wallet
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -105,6 +112,8 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - amount
  *             properties:
  *               amount:
  *                 type: number
@@ -113,8 +122,11 @@ router.post(
  *     responses:
  *       200:
  *         description: Wallet debited
+ *       400:
+ *         description: Invalid request or insufficient balance
+ *       401:
+ *         description: Unauthorized
  */
-
 router.post(
     "/debit",
     protect,
@@ -122,13 +134,13 @@ router.post(
 );
 
 
-
 /**
  * @swagger
  * /api/v1/wallet/transactions:
  *   get:
  *     summary: Get wallet transaction history
- *     tags: [Wallet]
+ *     tags:
+ *       - Wallet
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -140,8 +152,9 @@ router.post(
  *     responses:
  *       200:
  *         description: Transactions returned
+ *       401:
+ *         description: Unauthorized
  */
-
 router.get(
     "/transactions",
     protect,

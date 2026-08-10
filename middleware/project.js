@@ -1,139 +1,110 @@
-const Project = require("../models/Project");
-
-
-module.exports = async function(req,res,next){
-
-
-try{
-
-
-const key =
-req.headers["x-api-key"];
+const {
+    resolveApiKey
+} = require("../services/apiKeyService");
 
 
 
-if(!key){
+const project = async (req, res, next) => {
 
-return res.status(400).json({
+    try {
 
-success:false,
-
-message:"API Key missing"
-
-});
-
-}
+        const projectKey =
+            req.headers["x-api-key"];
 
 
+        if (!projectKey) {
 
-const project = await Project.findOne({
+            return res.status(400).json({
 
-$or:[
+                success: false,
 
-{
-apiKey:key
-},
+                message: "Project API key is missing"
 
-{
-"apiKeys.key":key
-}
+            });
 
-]
-
-});
+        }
 
 
-
-if(!project){
-
-return res.status(401).json({
-
-success:false,
-
-message:"Invalid API Key"
-
-});
-
-}
+        const result =
+            await resolveApiKey(projectKey);
 
 
+        if (!result) {
 
-let apiKeyRecord = null;
+            return res.status(401).json({
 
+                success: false,
 
+                message: "Invalid project API key"
 
-if(project.apiKeys && project.apiKeys.length){
+            });
 
-
-apiKeyRecord =
-project.apiKeys.find(
-item=>item.key===key
-);
-
-
-}
+        }
 
 
+        /*
+        |--------------------------------------------------------------------------
+        | Attach project
+        |--------------------------------------------------------------------------
+        */
 
-if(apiKeyRecord){
-
-
-if(apiKeyRecord.status!=="active"){
-
-return res.status(401).json({
-
-success:false,
-
-message:"API Key inactive"
-
-});
-
-}
+        req.project =
+            result.project;
 
 
-apiKeyRecord.lastUsed =
-new Date();
+        /*
+        |--------------------------------------------------------------------------
+        | Attach API key
+        |--------------------------------------------------------------------------
+        */
+
+        req.apiKey =
+            result.apiKey;
 
 
-await project.save();
+        /*
+        |--------------------------------------------------------------------------
+        | Attach permissions
+        |--------------------------------------------------------------------------
+        */
+
+        req.apiKeyPermissions =
+            result.permissions;
 
 
-}
+        /*
+        |--------------------------------------------------------------------------
+        | Identify API key source
+        |--------------------------------------------------------------------------
+        */
+
+        req.apiKeySource =
+            result.source;
 
 
+        next();
 
-req.project = project;
 
-req.apiKey = apiKeyRecord || {
+    } catch (error) {
 
-key:key,
+        console.error(
+            "PROJECT MIDDLEWARE ERROR:",
+            error
+        );
 
-project:project._id
+
+        return res.status(500).json({
+
+            success: false,
+
+            message: "Project authentication failed"
+
+        });
+
+    }
 
 };
 
 
 
-next();
-
-
-
-}catch(error){
-
-
-console.error(error);
-
-
-res.status(500).json({
-
-success:false,
-
-message:"Project authentication failed"
-
-});
-
-
-}
-
-
-};
+module.exports = project;

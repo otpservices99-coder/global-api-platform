@@ -7,8 +7,15 @@ const project = require("../middleware/project");
 const Event = require("../models/Event");
 
 const {
-processEvent
-}=require("../services/ruleEngine");
+    processEvent
+} = require("../services/ruleEngine");
+
+
+const {
+    processWorkflow
+} = require("../services/workflowEngine");
+
+
 
 
 
@@ -22,12 +29,19 @@ try{
 
 
 const {
+
 event,
+
 entityType,
+
 entityId,
+
 userId,
+
 data,
+
 metadata
+
 }=req.body;
 
 
@@ -43,6 +57,8 @@ message:"Event name required"
 });
 
 }
+
+
 
 
 
@@ -66,9 +82,32 @@ metadata:metadata || {}
 
 
 
-// Send event to rule engine
 
-processEvent(newEvent);
+
+// Send event through rule engine
+
+await processEvent(
+
+req.project._id,
+
+newEvent
+
+);
+
+
+
+
+// Send event through workflow engine
+
+await processWorkflow(
+
+req.project._id,
+
+newEvent
+
+);
+
+
 
 
 
@@ -84,7 +123,15 @@ data:newEvent
 
 
 
+
+
 }catch(error){
+
+
+console.error(
+"Event processing error:",
+error.message
+);
 
 
 res.status(500).json({
@@ -100,6 +147,9 @@ message:error.message
 
 
 });
+
+
+
 
 
 module.exports = router;

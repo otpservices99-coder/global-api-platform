@@ -5,74 +5,95 @@ const {
 } = require("../handlers");
 
 
+const {
+    resolveObject
+} = require("./variableResolver");
+
+
+const {
+    startExecution,
+    finishExecution
+} = require("./workflowLogger");
+
+
+
+
 
 
 
 const checkCondition = (
-condition,
-context
+
+    condition,
+
+    context
+
 )=>{
 
 
-const value =
-condition.field
-.split(".")
-.reduce(
-(obj,key)=>obj?.[key],
-context
-);
+    const value =
+
+        condition.field
+
+        .split(".")
+
+        .reduce(
+
+            (obj,key)=>obj?.[key],
+
+            context
+
+        );
 
 
 
-switch(condition.operator){
+    switch(condition.operator){
 
 
-case "==":
+        case "==":
 
-return value == condition.value;
-
-
-
-case "!=":
-
-return value != condition.value;
+            return value == condition.value;
 
 
 
-case ">":
+        case "!=":
 
-return value > condition.value;
-
-
-
-case "<":
-
-return value < condition.value;
+            return value != condition.value;
 
 
 
-case ">=":
+        case ">":
 
-return value >= condition.value;
-
-
-
-case "<=":
-
-return value <= condition.value;
+            return value > condition.value;
 
 
 
-default:
+        case "<":
 
-return false;
-
-
-}
+            return value < condition.value;
 
 
+
+        case ">=":
+
+            return value >= condition.value;
+
+
+
+        case "<=":
+
+            return value <= condition.value;
+
+
+
+        default:
+
+            return false;
+
+    }
 
 };
+
+
 
 
 
@@ -81,112 +102,291 @@ return false;
 
 
 const processWorkflow = async(
-projectId,
-event
+
+    projectId,
+
+    event
+
 )=>{
 
 
-const workflows =
-await Workflow.find({
+    const workflows =
 
-project:projectId,
+        await Workflow.find({
 
-enabled:true,
+            project:projectId,
 
-"trigger.event":event.name
+            enabled:true,
 
-});
+            "trigger.event":event.name
 
-
-
-
-for(const workflow of workflows){
-
-
-
-let passed = true;
-
-
-
-for(const condition of workflow.conditions){
-
-
-if(
-!checkCondition(
-condition,
-{
-event,
-data:event.data
-}
-)
-){
-
-passed=false;
-
-break;
-
-}
-
-
-}
-
-
-
-
-if(!passed){
-
-continue;
-
-}
+        });
 
 
 
 
 
-console.log(
-"Workflow matched:",
-workflow.name
-);
+    for(const workflow of workflows){
+
+
+        const started = Date.now();
+
+
+
+        let execution;
+
+
+
+        try {
+
+
+
+            execution =
+
+                await startExecution({
+
+                    project:projectId,
+
+                    workflow,
+
+                    event
+
+                });
 
 
 
 
 
-for(const action of workflow.actions){
+            let passed = true;
 
 
 
-const result =
-await execute(
+            const context = {
 
-action.handler,
+                event,
 
-{
+                data:event.data
 
-projectId,
-
-event,
-
-data:action.data
-
-}
-
-);
+            };
 
 
 
-console.log(
-"Workflow action result:",
-result
-);
-
-
-}
 
 
 
-}
+            for(const condition of workflow.conditions){
 
+
+
+                if(
+
+                    !checkCondition(
+
+                        condition,
+
+                        context
+
+                    )
+
+                ){
+
+                    passed=false;
+
+                    break;
+
+                }
+
+
+            }
+
+
+
+
+
+
+            if(!passed){
+
+
+
+                await finishExecution(
+
+                    execution._id,
+
+                    {
+
+                        status:"success",
+
+                        actions:[
+
+                            {
+
+                                message:"Conditions not met"
+
+                            }
+
+                        ],
+
+                        duration:
+
+                            Date.now() - started
+
+                    }
+
+                );
+
+
+
+                continue;
+
+            }
+
+
+
+
+
+
+
+
+            const results=[];
+
+
+
+
+
+
+
+            for(const action of workflow.actions){
+
+
+
+                const resolvedData =
+
+                    resolveObject(
+
+                        action.data,
+
+                        context
+
+                    );
+
+
+
+
+
+
+                const result =
+
+                    await execute(
+
+                        action.handler,
+
+                        {
+
+                            projectId,
+
+                            event,
+
+                            data:resolvedData,
+
+                            userId:event.entityId
+
+                        }
+
+                    );
+
+
+
+
+
+                results.push({
+
+                    handler:action.handler,
+
+                    result
+
+                });
+
+
+
+
+
+            }
+
+
+
+
+
+
+
+
+            await finishExecution(
+
+                execution._id,
+
+                {
+
+                    status:"success",
+
+                    actions:results,
+
+                    duration:
+
+                        Date.now() - started
+
+                }
+
+            );
+
+
+
+
+
+
+
+        } catch(error){
+
+
+
+            console.error(
+
+                "Workflow Error:",
+
+                error.message
+
+            );
+
+
+
+
+            if(execution){
+
+
+                await finishExecution(
+
+                    execution._id,
+
+                    {
+
+                        status:"failed",
+
+                        error:error.message,
+
+                        duration:
+
+                            Date.now() - started
+
+                    }
+
+                );
+
+
+            }
+
+
+        }
+
+
+    }
 
 
 };
@@ -194,8 +394,13 @@ result
 
 
 
+
+
+
 module.exports = {
 
-processWorkflow
+    processWorkflow,
+
+    checkCondition
 
 };

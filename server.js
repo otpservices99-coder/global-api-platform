@@ -1,4 +1,3 @@
-
 process.on("uncaughtException", (err) => {
     console.error("UNCAUGHT EXCEPTION:", err);
 });
@@ -7,7 +6,8 @@ process.on("unhandledRejection", (err) => {
     console.error("UNHANDLED REJECTION:", err);
 });
 
-require("dotenv").config();require("dotenv").config();
+
+require("dotenv").config();
 
 
 const express = require("express");
@@ -21,500 +21,656 @@ const swaggerSpec = require("./config/swagger");
 const connectDB = require("./config/database");
 
 
-// Start background engines
+// ============================================================
+// BACKGROUND ENGINES
+// ============================================================
 
 require("./services/schedulerEngine");
 
+require("./handlers");
 
-// Middleware
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 
 const project =
-require("./middleware/project");
+    require("./middleware/project");
 
 const apiUsage =
-require("./middleware/apiUsage");
+    require("./middleware/apiUsage");
 
 
-// Routes
+// ============================================================
+// ROUTES
+// ============================================================
 
 const homeRoute =
-require("./routes/home");
+    require("./routes/home");
 
 const authRoute =
-require("./routes/auth");
+    require("./routes/auth");
 
 const userRoute =
-require("./routes/user");
+    require("./routes/user");
 
 const adminRoute =
-require("./routes/admin");
+    require("./routes/admin");
 
 const walletRoute =
-require("./routes/wallet");
+    require("./routes/wallet");
 
 const withdrawalRoute =
-require("./routes/withdrawal");
+    require("./routes/withdrawal");
 
 const dashboardRoute =
-require("./routes/dashboard");
+    require("./routes/dashboard");
 
 const adminDashboardRoute =
-require("./routes/adminDashboard");
+    require("./routes/adminDashboard");
 
 const adminWithdrawalRoute =
-require("./routes/adminWithdrawal");
+    require("./routes/adminWithdrawal");
 
 const adminUsersRoute =
-require("./routes/adminUsers");
+    require("./routes/adminUsers");
 
 const adminImpersonationRoute =
-require("./routes/adminImpersonation");
+    require("./routes/adminImpersonation");
 
 const adminWalletRoute =
-require("./routes/adminWallet");
+    require("./routes/adminWallet");
+
+const adminTransactionRoute =
+    require("./routes/adminTransaction");
 
 const projectRoute =
-require("./routes/project");
+    require("./routes/project");
 
 const settingsRoute =
-require("./routes/settings");
+    require("./routes/settings");
 
 const notificationRoute =
-require("./routes/notification");
-
-const searchRoute =
-require("./routes/search");
+    require("./routes/notifications");
 
 const auditRoute =
-require("./routes/audit");
+    require("./routes/audit");
 
 const statsRoute =
-require("./routes/stats");
+    require("./routes/stats");
 
 const platformRoute =
-require("./routes/platform");
+    require("./routes/platform");
 
 const eventRoute =
-require("./routes/events");
+    require("./routes/events");
 
 const recordsRoute =
-require("./routes/records");
+    require("./routes/records");
 
 const resourceRoute =
-require("./routes/resources");
+    require("./routes/resources");
 
 const workflowRoute =
-require("./routes/workflows");
+    require("./routes/workflows");
 
 const platformAdminRoute =
-require("./routes/platformAdmin");
+    require("./routes/platformAdmin");
 
 const controlCenterRoute =
-require("./routes/controlCenter");
+    require("./routes/controlCenter");
+
+const actionsRoute =
+    require("./routes/actions");
+
+const workflowExecutionRoute =
+    require("./routes/workflowExecutions");
+
+const handlersRoute =
+    require("./routes/handlers");
+
+const searchRoute =
+    require("./routes/search");
+
+const adminNotificationsRoute =
+    require("./routes/adminNotifications");
+
+const apiKeyRoute =
+    require("./routes/apiKeys");
 
 
-// NEW RESOURCE MANAGER
+// ============================================================
+// RESOURCE MANAGER
+// ============================================================
 
 const resourceManagerRoute =
-require("./routes/resourceManager");
+    require("./routes/resourceManager");
 
 const schemaManagerRoute =
-require("./routes/schemaManager");
+    require("./routes/schemaManager");
 
-// App
+
+// ============================================================
+// ROLE TEST
+// ============================================================
+
+const roleTestRoute =
+    require("./routes/roleTest");
+
+
+// ============================================================
+// APP
+// ============================================================
 
 const app = express();
 
 
-// Database
+// ============================================================
+// DATABASE
+// ============================================================
 
 connectDB();
 
 
-
-// Global middleware
+// ============================================================
+// GLOBAL MIDDLEWARE
+// ============================================================
 
 app.use(
-cors()
+    cors()
 );
 
 
 app.use(
-helmet({
-contentSecurityPolicy:false
-})
+    helmet({
+        contentSecurityPolicy: false
+    })
 );
 
 
 app.use(
-morgan("dev")
+    morgan("dev")
 );
 
 
 app.use(
-express.json()
+    express.json()
 );
 
 
 app.use(
-express.urlencoded({
-extended:true
-})
+    express.urlencoded({
+        extended: true
+    })
 );
 
 
-
-// Swagger
+// ============================================================
+// SWAGGER
+// ============================================================
 
 app.use(
-"/api-docs",
-swaggerUi.serve,
-swaggerUi.setup(swaggerSpec)
+    "/api-docs",
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec)
 );
 
 
 app.get(
-"/api-docs/swagger.json",
-(req,res)=>{
+    "/api-docs/swagger.json",
+    (req, res) => {
 
-res.json(swaggerSpec);
+        res.json(swaggerSpec);
 
-}
+    }
 );
 
 
-
-// Home
+// ============================================================
+// HOME
+// ============================================================
 
 app.use(
-"/",
-homeRoute
+    "/",
+    homeRoute
 );
 
 
-
-// Authentication
+// ============================================================
+// AUTHENTICATION
+// ============================================================
 
 app.use(
-"/api/auth",
-authRoute
+    "/api/auth",
+    authRoute
 );
 
 
-
-// User
+// ============================================================
+// USER
+// ============================================================
 
 app.use(
-"/api/user",
-userRoute
+    "/api/user",
+    userRoute
 );
 
 
-
-// Admin
+// ============================================================
+// ADMIN ROOT
+// ============================================================
 
 app.use(
-"/api/v1/admin",
-project,
-apiUsage,
-adminRoute
+    "/api/v1/admin",
+    project,
+    apiUsage,
+    adminRoute
 );
 
 
-
-// Wallet
+// ============================================================
+// USER WALLET
+// ============================================================
 
 app.use(
-"/api/v1/wallet",
-project,
-apiUsage,
-walletRoute
+    "/api/v1/wallet",
+    project,
+    apiUsage,
+    walletRoute
 );
 
 
-
-// Dashboard
+// ============================================================
+// USER DASHBOARD
+// ============================================================
 
 app.use(
-"/api/v1/dashboard",
-project,
-apiUsage,
-dashboardRoute
+    "/api/v1/dashboard",
+    project,
+    apiUsage,
+    dashboardRoute
 );
 
 
-
-// Withdrawals
+// ============================================================
+// USER WITHDRAWALS
+// ============================================================
 
 app.use(
-"/api/v1/withdrawals",
-project,
-apiUsage,
-withdrawalRoute
+    "/api/v1/withdrawals",
+    project,
+    apiUsage,
+    withdrawalRoute
 );
 
 
-
-// Admin Dashboard
+// ============================================================
+// ADMIN DASHBOARD
+// ============================================================
 
 app.use(
-"/api/v1/admin/dashboard",
-project,
-apiUsage,
-adminDashboardRoute
+    "/api/v1/admin/dashboard",
+    project,
+    apiUsage,
+    adminDashboardRoute
 );
 
 
-
-// Admin Withdrawals
+// ============================================================
+// ADMIN WITHDRAWALS
+// ============================================================
 
 app.use(
-"/api/v1/admin/withdrawals",
-project,
-apiUsage,
-adminWithdrawalRoute
+    "/api/v1/admin/withdrawals",
+    project,
+    apiUsage,
+    adminWithdrawalRoute
 );
 
 
-
-// Admin Users
+// ============================================================
+// ADMIN USERS
+// ============================================================
 
 app.use(
-"/api/v1/admin/users",
-project,
-apiUsage,
-adminUsersRoute
+    "/api/v1/admin/users",
+    project,
+    apiUsage,
+    adminUsersRoute
 );
 
 
-
-// Admin Wallet
+// ============================================================
+// ADMIN WALLET
+// ============================================================
 
 app.use(
-"/api/v1/admin/wallet",
-project,
-apiUsage,
-adminWalletRoute
+    "/api/v1/admin/wallet",
+    project,
+    apiUsage,
+    adminWalletRoute
 );
 
 
-
-// Impersonation
+// ============================================================
+// ADMIN TRANSACTIONS
+// ============================================================
 
 app.use(
-"/api/v1/admin/impersonate",
-adminImpersonationRoute
+    "/api/v1/admin/transactions",
+    project,
+    apiUsage,
+    adminTransactionRoute
 );
 
 
-
-// Audit
+// ============================================================
+// ADMIN IMPERSONATION
+// ============================================================
 
 app.use(
-"/api/v1/admin/audit",
-project,
-apiUsage,
-auditRoute
+    "/api/v1/admin/impersonate",
+    adminImpersonationRoute
 );
 
 
-
-// Stats
+// ============================================================
+// ADMIN AUDIT
+// ============================================================
 
 app.use(
-"/api/v1/admin/stats",
-project,
-apiUsage,
-statsRoute
+    "/api/v1/admin/audit",
+    project,
+    apiUsage,
+    auditRoute
 );
 
 
-
-// Projects
+// ============================================================
+// ADMIN STATS
+// ============================================================
 
 app.use(
-"/api/v1/admin/projects",
-projectRoute
+    "/api/v1/admin/stats",
+    project,
+    apiUsage,
+    statsRoute
 );
 
 
-
-// Settings
+// ============================================================
+// PROJECTS
+// ============================================================
 
 app.use(
-"/api/v1/settings",
-project,
-apiUsage,
-settingsRoute
+    "/api/v1/admin/projects",
+    projectRoute
 );
 
 
-
-// Notifications
+// ============================================================
+// SETTINGS
+// ============================================================
 
 app.use(
-"/api/v1/notifications",
-project,
-apiUsage,
-notificationRoute
+    "/api/v1/settings",
+    project,
+    apiUsage,
+    settingsRoute
 );
 
 
-
-// Search
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
 
 app.use(
-"/api/v1/search",
-project,
-apiUsage,
-searchRoute
+    "/api/v1/notifications",
+    project,
+    apiUsage,
+    notificationRoute
 );
 
 
-
-// Platform
+// ============================================================
+// SEARCH
+// ============================================================
 
 app.use(
-"/api/v1/platform",
-platformRoute
+    "/api/v1/search",
+    project,
+    apiUsage,
+    searchRoute
 );
 
 
-
-// Events
+// ============================================================
+// PLATFORM
+// ============================================================
 
 app.use(
-"/api/v1/events",
-project,
-apiUsage,
-eventRoute
+    "/api/v1/platform",
+    platformRoute
 );
 
 
-
-// Records
+// ============================================================
+// EVENTS
+// ============================================================
 
 app.use(
-"/api/v1/records",
-project,
-apiUsage,
-recordsRoute
+    "/api/v1/events",
+    project,
+    apiUsage,
+    eventRoute
 );
 
 
-
-// Resources
+// ============================================================
+// RECORDS
+// ============================================================
 
 app.use(
-"/api/v1/resources",
-project,
-apiUsage,
-resourceRoute
+    "/api/v1/records",
+    project,
+    apiUsage,
+    recordsRoute
 );
 
 
-
-// Resource Manager
+// ============================================================
+// RESOURCES
+// ============================================================
 
 app.use(
-"/api/v1/resource-manager",
-project,
-apiUsage,
-resourceManagerRoute
+    "/api/v1/resources",
+    project,
+    apiUsage,
+    resourceRoute
 );
 
 
-
-// Schema Manager
+// ============================================================
+// RESOURCE MANAGER
+// ============================================================
 
 app.use(
-"/api/v1/schema-manager",
-project,
-apiUsage,
-schemaManagerRoute
+    "/api/v1/resource-manager",
+    project,
+    apiUsage,
+    resourceManagerRoute
 );
 
 
-
-// Workflows
+// ============================================================
+// SCHEMA MANAGER
+// ============================================================
 
 app.use(
-"/api/v1/workflows",
-project,
-apiUsage,
-workflowRoute
+    "/api/v1/schema-manager",
+    project,
+    apiUsage,
+    schemaManagerRoute
 );
 
 
-
-// Super Admin Platform
+// ============================================================
+// WORKFLOWS
+// ============================================================
 
 app.use(
-"/api/v1/platform/admin",
-platformAdminRoute
+    "/api/v1/workflows",
+    project,
+    apiUsage,
+    workflowRoute
 );
 
 
-// Admin Control Center
+// ============================================================
+// SUPER ADMIN PLATFORM
+// ============================================================
 
 app.use(
-"/api/v1/admin/control-center",
-controlCenterRoute
+    "/api/v1/platform/admin",
+    platformAdminRoute
 );
 
 
+// ============================================================
+// ADMIN CONTROL CENTER
+// ============================================================
 
+app.use(
+    "/api/v1/admin/control-center",
+    controlCenterRoute
+);
+
+
+// ============================================================
+// DYNAMIC ACTIONS
+// ============================================================
+
+app.use(
+    "/api/v1/actions",
+    project,
+    apiUsage,
+    actionsRoute
+);
+
+
+// ============================================================
+// ROLE TEST
+// ============================================================
+
+app.use(
+    "/api/v1/role-test",
+    roleTestRoute
+);
+
+
+// ============================================================
+// WORKFLOW EXECUTIONS
+// ============================================================
+
+app.use(
+    "/api/v1/workflow-executions",
+    workflowExecutionRoute
+);
+
+
+// ============================================================
+// HANDLERS
+// ============================================================
+
+app.use(
+    "/api/v1/handlers",
+    handlersRoute
+);
+
+
+// ============================================================
+// ADMIN NOTIFICATIONS
+// ============================================================
+
+app.use(
+    "/api/v1/admin/notifications",
+    project,
+    apiUsage,
+    adminNotificationsRoute
+);
+
+
+// ============================================================
+// API KEYS
+// ============================================================
+
+app.use(
+    "/api/v1/admin/api-keys",
+    project,
+    apiUsage,
+    apiKeyRoute
+);
+
+
+// ============================================================
 // 404
+// ============================================================
 
 app.use(
-(req,res)=>{
+    (req, res) => {
 
-res.status(404).json({
+        res.status(404).json({
 
-success:false,
+            success: false,
 
-message:"Route not found"
+            message: "Route not found"
 
-});
+        });
 
-}
+    }
 );
 
 
-
-// Error handler
+// ============================================================
+// GLOBAL ERROR HANDLER
+// ============================================================
 
 app.use(
-(err,req,res,next)=>{
+    (err, req, res, next) => {
 
-console.error(err);
+        console.error(
+            "GLOBAL ERROR:",
+            err
+        );
 
-res.status(500).json({
 
-success:false,
+        res.status(500).json({
 
-message:"Internal server error"
+            success: false,
 
-});
+            message: "Internal server error"
 
-}
+        });
+
+    }
 );
 
 
-
-// Server
+// ============================================================
+// SERVER
+// ============================================================
 
 const PORT =
-process.env.PORT || 3000;
+    process.env.PORT || 3000;
 
 
 app.listen(
-PORT,
-()=>{
+    PORT,
+    () => {
 
-console.log(
-`🚀 Global Platform API running on port ${PORT}`
-);
+        console.log(
+            `🚀 Global Platform API running on port ${PORT}`
+        );
 
-}
+    }
 );

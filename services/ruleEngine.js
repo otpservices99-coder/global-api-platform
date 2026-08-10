@@ -1,23 +1,9 @@
 const Rule = require("../models/Rule");
-const Action = require("../models/Action");
 
 const {
-    execute
-} = require("../handlers");
+    processActions
+} = require("./actionEngine");
 
-
-
-/*
- Global Rule Engine
-
- Receives:
- - projectId
- - event
-
- Finds matching rules
- Executes only project-owned actions
-
-*/
 
 
 const processEvent = async(
@@ -44,7 +30,6 @@ status:"active",
 for(const rule of rules){
 
 
-
 console.log(
 "Matching rule:",
 rule.name
@@ -52,84 +37,16 @@ rule.name
 
 
 
-
-for(const action of rule.actions){
-
-
-
-const actionRecord =
-await Action.findOne({
-
-project:projectId,
-
-name:action.handler,
-
-enabled:true
-
-});
-
-
-
-
-
-if(!actionRecord){
-
-
-console.log(
-
-"Action unavailable:",
-action.handler
-
-);
-
-
-continue;
-
-
-}
-
-
-
-
-
-const result =
-await execute(
-
-action.handler,
+await processActions(
 
 {
+    ...event.toObject ? event.toObject() : event,
+    project:projectId
+},
 
-
-projectId,
-
-event,
-
-data:action.data,
-
-
-actionConfig:
-actionRecord.config
-
-
-}
+rule.actions
 
 );
-
-
-
-
-
-console.log(
-
-"Action result:",
-
-result
-
-);
-
-
-
-}
 
 
 
@@ -150,7 +67,6 @@ error.message
 
 
 }
-
 
 
 };
