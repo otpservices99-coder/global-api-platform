@@ -1,41 +1,304 @@
 const express = require("express");
-
 const router = express.Router();
-
-const protect = require("../middleware/auth");
-const admin = require("../middleware/admin");
 
 const Notification = require("../models/Notification");
 
+const protect = require("../middleware/auth");
+const projectMiddleware = require("../middleware/project");
+const admin = require("../middleware/admin");
+
+
+// ============================================================
+// GET ALL ADMIN NOTIFICATIONS
+// GET /api/v1/admin/notifications
+// ============================================================
+
+router.get(
+    "/",
+    protect,
+    projectMiddleware,
+    admin,
+    async (req, res) => {
+
+        try {
+
+            const {
+                page = 1,
+                limit = 20,
+                read,
+                type,
+                user
+            } = req.query;
+
+
+            const pageNumber = Math.max(
+                Number(page) || 1,
+                1
+            );
+
+
+            const limitNumber = Math.min(
+                Math.max(Number(limit) || 20, 1),
+                100
+            );
+
+
+            const query = {
+                project: req.project._id
+            };
+
+
+            // Optional read filter
+            if (read !== undefined) {
+
+                if (read === "true") {
+                    query.read = true;
+                }
+
+                if (read === "false") {
+                    query.read = false;
+                }
+
+            }
+
+
+            // Optional notification type filter
+            if (type) {
+                query.type = type;
+            }
+
+
+            // Optional user filter
+            if (user) {
+                query.user = user;
+            }
+
+
+            const total =
+                await Notification.countDocuments(query);
+
+
+            const notifications =
+                await Notification.find(query)
+
+                    .populate(
+                        "user",
+                        "username email"
+                    )
+
+                    .sort({
+                        createdAt: -1
+                    })
+
+                    .skip(
+                        (pageNumber - 1) * limitNumber
+                    )
+
+                    .limit(limitNumber);
+
+
+            const unread =
+                await Notification.countDocuments({
+                    project: req.project._id,
+                    read: false
+                });
+
+
+            return res.json({
+
+                success: true,
+
+                total,
+
+                unread,
+
+                page: pageNumber,
+
+                limit: limitNumber,
+
+                pages: Math.ceil(
+                    total / limitNumber
+                ),
+
+                data: notifications
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "Admin notifications error:",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message: error.message
+
+            });
+
+        }
+
+    }
+);
+
+
+// ============================================================
+// GET NOTIFICATIONS FOR ONE USER
+// GET /api/v1/admin/notifications/users/:userId
+// ============================================================
 
 router.get(
     "/users/:userId",
     protect,
+    projectMiddleware,
     admin,
-    async (req,res)=>{
+    async (req, res) => {
 
         try {
 
+            const {
+                page = 1,
+                limit = 20
+            } = req.query;
+
+
+            const pageNumber = Math.max(
+                Number(page) || 1,
+                1
+            );
+
+
+            const limitNumber = Math.min(
+                Math.max(Number(limit) || 20, 1),
+                100
+            );
+
+
+            const query = {
+
+                project: req.project._id,
+
+                user: req.params.userId
+
+            };
+
+
+            const total =
+                await Notification.countDocuments(query);
+
+
             const notifications =
-                await Notification.find({
-                    user:req.params.userId
-                })
-                .sort({
-                    createdAt:-1
-                });
+                await Notification.find(query)
+
+                    .populate(
+                        "user",
+                        "username email"
+                    )
+
+                    .sort({
+                        createdAt: -1
+                    })
+
+                    .skip(
+                        (pageNumber - 1) * limitNumber
+                    )
+
+                    .limit(limitNumber);
 
 
-            res.json({
-                success:true,
-                data:notifications
+            return res.json({
+
+                success: true,
+
+                total,
+
+                page: pageNumber,
+
+                limit: limitNumber,
+
+                pages: Math.ceil(
+                    total / limitNumber
+                ),
+
+                data: notifications
+
             });
 
 
-        } catch(err){
+        } catch (error) {
 
-            res.status(500).json({
-                success:false,
-                message:err.message
+            console.error(
+                "Admin user notifications error:",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message: error.message
+
+            });
+
+        }
+
+    }
+);
+
+
+// ============================================================
+// GET UNREAD NOTIFICATION COUNT
+// GET /api/v1/admin/notifications/unread/count
+// ============================================================
+
+router.get(
+    "/unread/count",
+    protect,
+    projectMiddleware,
+    admin,
+    async (req, res) => {
+
+        try {
+
+            const count =
+                await Notification.countDocuments({
+
+                    project: req.project._id,
+
+                    read: false
+
+                });
+
+
+            return res.json({
+
+                success: true,
+
+                count
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "Unread notification count error:",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message: error.message
+
             });
 
         }
