@@ -6,9 +6,7 @@ process.on("unhandledRejection", (err) => {
     console.error("UNHANDLED REJECTION:", err);
 });
 
-
 require("dotenv").config();
-
 
 const express = require("express");
 const cors = require("cors");
@@ -180,23 +178,19 @@ app.use(
     cors()
 );
 
-
 app.use(
     helmet({
         contentSecurityPolicy: false
     })
 );
 
-
 app.use(
     morgan("dev")
 );
 
-
 app.use(
     express.json()
 );
-
 
 app.use(
     express.urlencoded({
@@ -215,13 +209,10 @@ app.use(
     swaggerUi.setup(swaggerSpec)
 );
 
-
 app.get(
     "/api-docs/swagger.json",
     (req, res) => {
-
         res.json(swaggerSpec);
-
     }
 );
 
@@ -421,7 +412,7 @@ app.use(
 
 
 // ============================================================
-// NOTIFICATIONS
+// USER NOTIFICATIONS
 // ============================================================
 
 app.use(
@@ -620,11 +611,8 @@ app.use(
     (req, res) => {
 
         res.status(404).json({
-
             success: false,
-
             message: "Route not found"
-
         });
 
     }
@@ -643,13 +631,9 @@ app.use(
             err
         );
 
-
         res.status(500).json({
-
             success: false,
-
             message: "Internal server error"
-
         });
 
     }
@@ -662,7 +646,6 @@ app.use(
 
 const PORT =
     process.env.PORT || 3000;
-
 
 app.listen(
     PORT,
