@@ -1,10 +1,9 @@
 const express = require("express");
+
 const router = express.Router();
 
 const Notification = require("../models/Notification");
-
 const protect = require("../middleware/auth");
-const projectMiddleware = require("../middleware/project");
 const admin = require("../middleware/admin");
 
 
@@ -16,7 +15,6 @@ const admin = require("../middleware/admin");
 router.get(
     "/",
     protect,
-    projectMiddleware,
     admin,
     async (req, res) => {
 
@@ -48,7 +46,6 @@ router.get(
             };
 
 
-            // Optional read filter
             if (read !== undefined) {
 
                 if (read === "true") {
@@ -62,13 +59,11 @@ router.get(
             }
 
 
-            // Optional notification type filter
             if (type) {
                 query.type = type;
             }
 
 
-            // Optional user filter
             if (user) {
                 query.user = user;
             }
@@ -80,20 +75,16 @@ router.get(
 
             const notifications =
                 await Notification.find(query)
-
                     .populate(
                         "user",
                         "username email"
                     )
-
                     .sort({
                         createdAt: -1
                     })
-
                     .skip(
                         (pageNumber - 1) * limitNumber
                     )
-
                     .limit(limitNumber);
 
 
@@ -155,7 +146,6 @@ router.get(
 router.get(
     "/users/:userId",
     protect,
-    projectMiddleware,
     admin,
     async (req, res) => {
 
@@ -194,20 +184,16 @@ router.get(
 
             const notifications =
                 await Notification.find(query)
-
                     .populate(
                         "user",
                         "username email"
                     )
-
                     .sort({
                         createdAt: -1
                     })
-
                     .skip(
                         (pageNumber - 1) * limitNumber
                     )
-
                     .limit(limitNumber);
 
 
@@ -260,7 +246,6 @@ router.get(
 router.get(
     "/unread/count",
     protect,
-    projectMiddleware,
     admin,
     async (req, res) => {
 

@@ -247,6 +247,14 @@ app.use(
 );
 
 
+app.use(
+    "/api/v1/admin/notifications",
+    project,
+    apiUsage,
+    adminNotificationsRoute
+);
+
+
 // ============================================================
 // ADMIN ROOT
 // ============================================================
@@ -408,18 +416,6 @@ app.use(
     project,
     apiUsage,
     settingsRoute
-);
-
-
-// ============================================================
-// USER NOTIFICATIONS
-// ============================================================
-
-app.use(
-    "/api/v1/notifications",
-    project,
-    apiUsage,
-    notificationRoute
 );
 
 
