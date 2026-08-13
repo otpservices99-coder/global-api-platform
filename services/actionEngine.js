@@ -8,104 +8,208 @@ const {
     loadActions
 } = require("./actionLoader");
 
+const {
+    executeUniversalAction
+} = require("./universalActionEngine");
+
 const audit = require("./auditService");
 
 
-/*
- * ============================================================
- * GLOBAL ACTION ENGINE
- * ============================================================
- *
- * Responsibilities:
- *
- * 1. Resolve an enabled action for the current project.
- * 2. Load the project's dynamic action handlers.
- * 3. Execute the requested action.
- * 4. Return the handler result.
- *
- * The engine does NOT contain project-specific business logic.
- *
- * Handlers are responsible for their own business operations
- * and specialized audit records.
- *
- * Generic audit logging can be explicitly requested through
- * context.audit.
- *
- * ============================================================
- */
+// ============================================================
+// GLOBAL ACTION ENGINE
+// ============================================================
+//
+// Central execution gateway for the platform.
+//
+// Supports:
+//
+// 1. Dynamic universal resource operations
+//
+//    create
+//    find
+//    read
+//    findOne
+//    update
+//    delete
+//    increment
+//    decrement
+//
+// 2. Specialized registered handlers
+//
+//    wallet.credit
+//    wallet.debit
+//    withdrawal.approve
+//    withdrawal.reject
+//    user.status_update
+//    user.role_update
+//    notification.send
+//
+// 3. Multiple action execution
+//
+//    events
+//    rules
+//    workflows
+//    automation
+//    HTTP engine
+//
+// ============================================================
 
 
-const processAction = async (context = {}) => {
+
+// ============================================================
+// UNIVERSAL OPERATIONS
+// ============================================================
+
+const UNIVERSAL_OPERATIONS = new Set([
+
+    "create",
+
+    "find",
+
+    "read",
+
+    "findOne",
+
+    "update",
+
+    "delete",
+
+    "increment",
+
+    "decrement"
+
+]);
+
+
+
+const isUniversalOperation = (operation) => {
+
+    if (!operation) {
+
+        return false;
+
+    }
+
+    return UNIVERSAL_OPERATIONS.has(
+        String(operation).trim()
+    );
+
+};
+
+
+
+// ============================================================
+// PROCESS SINGLE ACTION
+// ============================================================
+
+const processAction = async (
+    context = {}
+) => {
 
     try {
 
         const {
+
             projectId,
+
             action,
+
             user = null,
+
             actorId = null,
+
             data = {},
+
             req = null,
+
             audit: auditOptions = null
+
         } = context;
 
 
-        /*
-         * ----------------------------------------------------
-         * Validate required context.
-         * ----------------------------------------------------
-         */
+
+        // ====================================================
+        // VALIDATION
+        // ====================================================
 
         if (!projectId) {
 
             return {
+
                 success: false,
-                message: "Project ID is required"
+
+                message:
+                    "Project ID is required"
+
             };
 
         }
+
 
 
         if (!action) {
 
             return {
+
                 success: false,
-                message: "Action name is required"
+
+                message:
+                    "Action name is required"
+
             };
 
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Load enabled actions for this project.
-         *
-         * The action loader is responsible for registering
-         * project-specific handlers dynamically.
-         * ----------------------------------------------------
-         */
 
-        await loadActions(projectId);
+        const actionName =
+            String(action).trim();
 
 
-        /*
-         * ----------------------------------------------------
-         * Resolve the action record.
-         *
-         * Project ownership is always enforced.
-         * ----------------------------------------------------
-         */
+
+        if (!actionName) {
+
+            return {
+
+                success: false,
+
+                message:
+                    "Action name is required"
+
+            };
+
+        }
+
+
+
+        // ====================================================
+        // LOAD PROJECT ACTIONS
+        // ====================================================
+
+        await loadActions(
+            projectId
+        );
+
+
+
+        // ====================================================
+        // FIND ACTION DEFINITION
+        // ====================================================
 
         const actionRecord =
             await Action.findOne({
 
-                project: projectId,
+                project:
+                    projectId,
 
-                name: action,
+                name:
+                    actionName,
 
-                enabled: true
+                enabled:
+                    true
 
             });
+
 
 
         if (!actionRecord) {
@@ -114,27 +218,90 @@ const processAction = async (context = {}) => {
 
                 success: false,
 
-                message: "Action not found",
+                message:
+                    "Action not found",
 
-                action
+                action:
+                    actionName
 
             };
 
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Build handler context.
-         * ----------------------------------------------------
-         */
 
-        const handlerContext = {
+        // ====================================================
+        // ACTION CONFIG
+        // ====================================================
+
+        const config =
+            actionRecord.config || {};
+
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Support both future/current Action structures
+        |--------------------------------------------------------------------------
+        |
+        | Newer Action documents may eventually contain:
+        |
+        |     operation
+        |     resource
+        |
+        | Older documents keep them inside config:
+        |
+        |     config.operation
+        |     config.resource
+        |
+        */
+
+        const operation =
+            actionRecord.operation ||
+            config.operation ||
+            null;
+
+
+
+        const resource =
+            actionRecord.resource ||
+            config.resource ||
+            null;
+
+
+
+        // ====================================================
+        // BUILD EXECUTION CONTEXT
+        // ====================================================
+
+        const executionContext = {
 
             projectId,
 
+            project:
+                projectId,
+
+            action:
+                actionName,
+
+            actionId:
+                actionRecord._id,
+
+            actionRecord,
+
+            actionConfig:
+                config,
+
+            operation,
+
+            resource,
+
+            user,
+
             userId:
-                user?._id || null,
+                user?._id ||
+                context.userId ||
+                null,
 
             actorId,
 
@@ -145,64 +312,138 @@ const processAction = async (context = {}) => {
         };
 
 
-        /*
-         * ----------------------------------------------------
-         * Execute the registered handler.
-         * ----------------------------------------------------
-         */
 
-        const result =
-            await execute(
-                action,
-                handlerContext
-            );
-
-
-        /*
-         * ----------------------------------------------------
-         * Handler failure.
-         *
-         * A handler may return:
-         *
-         * {
-         *     success: false,
-         *     message: "..."
-         * }
-         *
-         * Do not create a successful generic audit record
-         * for a failed action.
-         * ----------------------------------------------------
-         */
+        // ====================================================
+        // UNIVERSAL ACTION
+        // ====================================================
+        //
+        // Genuine CRUD operations are sent to the
+        // Universal Action Engine.
+        //
+        // Example:
+        //
+        // {
+        //   name: "create.post",
+        //   config: {
+        //      resource: "post",
+        //      operation: "create"
+        //   }
+        // }
+        //
+        // Specialized actions such as:
+        //
+        // wallet.credit
+        //
+        // use their registered handler instead.
+        //
+        // ====================================================
 
         if (
-            result &&
-            result.success === false
+            resource &&
+            isUniversalOperation(
+                operation
+            )
         ) {
+
+            const result =
+                await executeUniversalAction({
+
+                    projectId,
+
+                    actorId,
+
+                    userId:
+                        user?._id ||
+                        context.userId ||
+                        null,
+
+                    action:
+                        actionName,
+
+                    resource,
+
+                    operation,
+
+                    config,
+
+                    data,
+
+                    req
+
+                });
+
+
+
+            // =================================================
+            // AUDIT
+            // =================================================
+
+            if (
+                auditOptions &&
+                auditOptions.enabled === true
+            ) {
+
+                await audit.log({
+
+                    project:
+                        projectId,
+
+                    actor:
+                        actorId,
+
+                    user:
+                        user?._id ||
+                        context.userId ||
+                        null,
+
+                    action:
+                        actionName,
+
+                    resource:
+                        auditOptions.resource ||
+                        resource ||
+                        "",
+
+                    recordId:
+                        auditOptions.recordId ||
+                        null,
+
+                    metadata:
+                        auditOptions.metadata ||
+                        data,
+
+                    req
+
+                });
+
+            }
+
+
 
             return result;
 
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Optional generic audit.
-         *
-         * Generic auditing is opt-in.
-         *
-         * This prevents every handler from automatically
-         * producing duplicate audit records while still
-         * allowing future generic actions to request one.
-         *
-         * Example:
-         *
-         * audit: {
-         *     enabled: true,
-         *     resource: "some-resource",
-         *     recordId: "..."
-         * }
-         * ----------------------------------------------------
-         */
+
+        // ====================================================
+        // SPECIALIZED HANDLER
+        // ====================================================
+
+        const handlerResult =
+            await execute(
+
+                actionName,
+
+                executionContext
+
+            );
+
+
+
+        // ====================================================
+        // AUDIT SPECIALIZED ACTION
+        // ====================================================
 
         if (
             auditOptions &&
@@ -218,13 +459,16 @@ const processAction = async (context = {}) => {
                     actorId,
 
                 user:
-                    user?._id || null,
+                    user?._id ||
+                    context.userId ||
+                    null,
 
-                action,
+                action:
+                    actionName,
 
                 resource:
                     auditOptions.resource ||
-                    actionRecord.config?.resource ||
+                    resource ||
                     "",
 
                 recordId:
@@ -242,13 +486,9 @@ const processAction = async (context = {}) => {
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Return the handler result.
-         * ----------------------------------------------------
-         */
 
-        return result;
+        return handlerResult;
+
 
 
     } catch (error) {
@@ -257,6 +497,7 @@ const processAction = async (context = {}) => {
             "Action execution error:",
             error
         );
+
 
 
         return {
@@ -274,19 +515,38 @@ const processAction = async (context = {}) => {
 };
 
 
-/*
- * ============================================================
- * PROCESS MULTIPLE ACTIONS
- * ============================================================
- *
- * Used by event/rule-driven workflows.
- *
- * Each action is processed through the same global
- * processAction() pipeline.
- *
- * ============================================================
- */
 
+// ============================================================
+// PROCESS MULTIPLE ACTIONS
+// ============================================================
+//
+// Used by:
+//
+// - HTTP engine
+// - events
+// - rules
+// - workflows
+// - automation
+//
+// Every action passes through processAction().
+//
+// Supports action objects using:
+//
+//     item.name
+//
+//     item.action
+//
+//     item.handler
+//
+// This keeps the engine compatible with:
+//
+//     MongoDB Action documents
+//     legacy action objects
+//     workflow actions
+//     rule actions
+//     event actions
+//
+// ============================================================
 
 const processActions = async (
     event,
@@ -302,6 +562,7 @@ const processActions = async (
     }
 
 
+
     if (!Array.isArray(actions)) {
 
         throw new Error(
@@ -311,7 +572,9 @@ const processActions = async (
     }
 
 
+
     const results = [];
+
 
 
     for (
@@ -325,6 +588,96 @@ const processActions = async (
         }
 
 
+
+        // ====================================================
+        // RESOLVE ACTION NAME
+        // ====================================================
+
+        /*
+        |--------------------------------------------------------------------------
+        | MongoDB Action documents
+        |--------------------------------------------------------------------------
+        |
+        | Your Action model uses:
+        |
+        |     name
+        |
+        |--------------------------------------------------------------------------
+        | Older/internal objects
+        |--------------------------------------------------------------------------
+        |
+        | May use:
+        |
+        |     action
+        |     handler
+        |
+        |--------------------------------------------------------------------------
+        */
+
+        const actionName =
+
+            item.name ||
+
+            item.handler ||
+
+            item.action;
+
+
+
+        if (!actionName) {
+
+            results.push({
+
+                action:
+                    null,
+
+                result: {
+
+                    success:
+                        false,
+
+                    message:
+                        "Action name is required"
+
+                }
+
+            });
+
+            continue;
+
+        }
+
+
+
+        // ====================================================
+        // RESOLVE DATA
+        // ====================================================
+
+        /*
+        |--------------------------------------------------------------------------
+        | Action-specific data takes priority.
+        |
+        | Otherwise use event.data.
+        |--------------------------------------------------------------------------
+        */
+
+        const actionData =
+
+            item.data !== undefined
+
+                ? item.data
+
+                : (
+                    event.data ||
+                    {}
+                );
+
+
+
+        // ====================================================
+        // EXECUTE SINGLE ACTION
+        // ====================================================
+
         const result =
             await processAction({
 
@@ -332,58 +685,62 @@ const processActions = async (
                     event.project,
 
                 action:
-                    item.handler,
+                    actionName,
 
                 user:
                     event.userId
+
                         ? {
+
                             _id:
                                 event.userId
+
                         }
+
                         : null,
 
                 actorId:
+
+                    event.actorId ||
+
+                    event.userId ||
+
+                    null,
+
+                userId:
                     event.userId ||
                     null,
 
                 data:
-                    item.data ||
-                    event.data ||
-                    {},
+                    actionData,
 
                 req:
-                    event.req || null
+                    event.req ||
+                    null,
+
+                audit:
+                    event.audit ||
+                    null
 
             });
 
 
+
+        // ====================================================
+        // STORE RESULT
+        // ====================================================
+
         results.push({
 
             action:
-                item.handler,
+                actionName,
 
             result
 
         });
 
-
-        /*
-         * Stop the chain when an action explicitly fails.
-         *
-         * This prevents later actions from running after a
-         * failed financial or business operation.
-         */
-
-        if (
-            result &&
-            result.success === false
-        ) {
-
-            break;
-
-        }
-
     }
+
 
 
     return results;
@@ -391,10 +748,19 @@ const processActions = async (
 };
 
 
+
+// ============================================================
+// EXPORT
+// ============================================================
+
 module.exports = {
 
     processAction,
 
-    processActions
+    processActions,
+
+    isUniversalOperation,
+
+    UNIVERSAL_OPERATIONS
 
 };

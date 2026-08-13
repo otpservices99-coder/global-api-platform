@@ -4,59 +4,53 @@ const router = express.Router();
 
 const protect = require("../middleware/auth");
 
-const {
-    requestWithdrawal
-} = require("../controllers/withdrawalController");
+
+/*
+|--------------------------------------------------------------------------
+| WITHDRAWAL ROUTES
+|--------------------------------------------------------------------------
+|
+| Withdrawal requests are now handled by the Global Action Engine.
+|
+| Use:
+|
+| POST /api/v1/engine
+|
+| {
+|     "action": "withdrawal.request",
+|     "data": {
+|         "user": "...",
+|         "amount": 20,
+|         "method": "bank",
+|         "details": {
+|             "bank": "Test Bank",
+|             "accountNumber": "1234567890",
+|             "accountName": "Test User"
+|         }
+|     }
+| }
+|
+|--------------------------------------------------------------------------
+|
+| The old hardcoded:
+|
+| POST /api/v1/withdrawals/request
+|
+| endpoint has been removed.
+|
+|--------------------------------------------------------------------------
+*/
 
 
-/**
- * @swagger
- * tags:
- *   name: Withdrawals
- *   description: User withdrawal APIs
- */
-
-
-/**
- * @swagger
- * /api/v1/withdrawals/request:
- *   post:
- *     summary: Request withdrawal
- *     tags: [Withdrawals]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - amount
- *               - method
- *               - details
- *             properties:
- *               amount:
- *                 type: number
- *                 example: 50
- *               method:
- *                 type: string
- *                 example: bank
- *               details:
- *                 type: object
- *                 example:
- *                   bank: Example Bank
- *                   accountNumber: "1234567890"
- *                   accountName: Test User
- *     responses:
- *       200:
- *         description: Withdrawal request submitted
- */
-router.post(
-    "/request",
-    protect,
-    requestWithdrawal
-);
-
+/*
+|--------------------------------------------------------------------------
+| No hardcoded withdrawal mutation routes
+|--------------------------------------------------------------------------
+|
+| Future withdrawal operations should be registered as Actions and
+| executed through /api/v1/engine.
+|
+|--------------------------------------------------------------------------
+*/
 
 module.exports = router;

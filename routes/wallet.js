@@ -6,8 +6,6 @@ const protect = require("../middleware/auth");
 
 const {
     getWallet,
-    creditWallet,
-    debitWallet,
     getTransactions
 } = require("../controllers/walletController");
 
@@ -16,7 +14,7 @@ const {
  * @swagger
  * tags:
  *   name: Wallet
- *   description: Wallet APIs
+ *   description: Wallet read APIs
  */
 
 
@@ -24,7 +22,7 @@ const {
  * @swagger
  * /api/v1/wallet:
  *   get:
- *     summary: Get wallet
+ *     summary: Get current user's wallet
  *     tags:
  *       - Wallet
  *     security:
@@ -50,95 +48,9 @@ router.get(
 
 /**
  * @swagger
- * /api/v1/wallet/credit:
- *   post:
- *     summary: Credit wallet
- *     tags:
- *       - Wallet
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: header
- *         name: X-API-Key
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - amount
- *             properties:
- *               amount:
- *                 type: number
- *               description:
- *                 type: string
- *     responses:
- *       200:
- *         description: Wallet credited
- *       400:
- *         description: Invalid request
- *       401:
- *         description: Unauthorized
- */
-router.post(
-    "/credit",
-    protect,
-    creditWallet
-);
-
-
-/**
- * @swagger
- * /api/v1/wallet/debit:
- *   post:
- *     summary: Debit wallet
- *     tags:
- *       - Wallet
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: header
- *         name: X-API-Key
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - amount
- *             properties:
- *               amount:
- *                 type: number
- *               description:
- *                 type: string
- *     responses:
- *       200:
- *         description: Wallet debited
- *       400:
- *         description: Invalid request or insufficient balance
- *       401:
- *         description: Unauthorized
- */
-router.post(
-    "/debit",
-    protect,
-    debitWallet
-);
-
-
-/**
- * @swagger
  * /api/v1/wallet/transactions:
  *   get:
- *     summary: Get wallet transaction history
+ *     summary: Get current user's wallet transactions
  *     tags:
  *       - Wallet
  *     security:

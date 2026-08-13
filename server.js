@@ -55,11 +55,7 @@ const userRoute =
 const adminRoute =
     require("./routes/admin");
 
-const walletRoute =
-    require("./routes/wallet");
 
-const withdrawalRoute =
-    require("./routes/withdrawal");
 
 const dashboardRoute =
     require("./routes/dashboard");
@@ -100,17 +96,11 @@ const statsRoute =
 const platformRoute =
     require("./routes/platform");
 
-const eventRoute =
-    require("./routes/events");
 
-const recordsRoute =
-    require("./routes/records");
 
 const resourceRoute =
     require("./routes/resources");
 
-const workflowRoute =
-    require("./routes/workflows");
 
 const platformAdminRoute =
     require("./routes/platformAdmin");
@@ -121,8 +111,9 @@ const controlCenterRoute =
 const actionsRoute =
     require("./routes/actions");
 
-const workflowExecutionRoute =
-    require("./routes/workflowExecutions");
+const engineRoute =
+    require("./routes/engine");
+
 
 const handlersRoute =
     require("./routes/handlers");
@@ -268,18 +259,6 @@ app.use(
 
 
 // ============================================================
-// USER WALLET
-// ============================================================
-
-app.use(
-    "/api/v1/wallet",
-    project,
-    apiUsage,
-    walletRoute
-);
-
-
-// ============================================================
 // USER DASHBOARD
 // ============================================================
 
@@ -288,18 +267,6 @@ app.use(
     project,
     apiUsage,
     dashboardRoute
-);
-
-
-// ============================================================
-// USER WITHDRAWALS
-// ============================================================
-
-app.use(
-    "/api/v1/withdrawals",
-    project,
-    apiUsage,
-    withdrawalRoute
 );
 
 
@@ -445,24 +412,14 @@ app.use(
 // EVENTS
 // ============================================================
 
-app.use(
-    "/api/v1/events",
-    project,
-    apiUsage,
-    eventRoute
-);
+
 
 
 // ============================================================
 // RECORDS
 // ============================================================
 
-app.use(
-    "/api/v1/records",
-    project,
-    apiUsage,
-    recordsRoute
-);
+
 
 
 // ============================================================
@@ -505,12 +462,7 @@ app.use(
 // WORKFLOWS
 // ============================================================
 
-app.use(
-    "/api/v1/workflows",
-    project,
-    apiUsage,
-    workflowRoute
-);
+
 
 
 // ============================================================
@@ -546,6 +498,18 @@ app.use(
 
 
 // ============================================================
+// GLOBAL ACTION ENGINE
+// ============================================================
+
+app.use(
+    "/api/v1/engine",
+    project,
+    apiUsage,
+    engineRoute
+);
+
+
+// ============================================================
 // ROLE TEST
 // ============================================================
 
@@ -559,10 +523,7 @@ app.use(
 // WORKFLOW EXECUTIONS
 // ============================================================
 
-app.use(
-    "/api/v1/workflow-executions",
-    workflowExecutionRoute
-);
+
 
 
 // ============================================================

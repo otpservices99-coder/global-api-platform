@@ -1,179 +1,116 @@
 const crypto = require("crypto");
-
 const ApiKey = require("../models/ApiKey");
-const Project = require("../models/Project");
 
+const createApiKey = async (req, res) => {
+    try {
+        const projectId = req.project._id;
 
+        const {
+            name,
+            permissions
+        } = req.body;
 
-const createApiKey = async(req,res)=>{
+        let finalPermissions = ["*"];
 
-try{
+        if (Array.isArray(permissions) && permissions.length > 0) {
+            finalPermissions = [
+                ...new Set(
+                    permissions
+                        .map(p => String(p).trim())
+                        .filter(Boolean)
+                )
+            ];
+        }
 
-const projectId=req.project._id;
+        const key = crypto
+            .randomBytes(32)
+            .toString("hex");
 
+        const apiKey = await ApiKey.create({
+            project: projectId,
+            key,
+            name: name || "Default Key",
+            permissions: finalPermissions,
+            active: true
+        });
 
-const {
-name
-}=req.body;
+        return res.json({
+            success: true,
+            message: "API key created",
+            data: {
+                id: apiKey._id,
+                key: apiKey.key,
+                name: apiKey.name,
+                permissions: apiKey.permissions
+            }
+        });
 
+    } catch (error) {
+        console.error("CREATE API KEY ERROR:", error);
 
-const key=crypto
-.randomBytes(32)
-.toString("hex");
-
-
-const apiKey=await ApiKey.create({
-
-project:projectId,
-
-key,
-
-name:name || "Default Key"
-
-});
-
-
-res.json({
-
-success:true,
-
-message:"API key created",
-
-data:{
-
-id:apiKey._id,
-
-key:apiKey.key,
-
-name:apiKey.name
-
-}
-
-});
-
-
-}catch(error){
-
-res.status(500).json({
-
-success:false,
-
-message:error.message
-
-});
-
-}
-
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
 };
 
 
+const getApiKeys = async (req, res) => {
+    try {
+        const keys = await ApiKey.find({
+            project: req.project._id
+        })
+        .select("-key -__v");
 
+        return res.json({
+            success: true,
+            data: keys
+        });
 
-const getApiKeys = async(req,res)=>{
-
-try{
-
-
-const keys=await ApiKey.find({
-
-project:req.project._id
-
-})
-.select("-__v");
-
-
-res.json({
-
-success:true,
-
-data:keys
-
-});
-
-
-}catch(error){
-
-res.status(500).json({
-
-success:false,
-
-message:error.message
-
-});
-
-}
-
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
 };
 
 
+const revokeApiKey = async (req, res) => {
+    try {
+        const key = await ApiKey.findOne({
+            _id: req.params.id,
+            project: req.project._id
+        });
 
+        if (!key) {
+            return res.status(404).json({
+                success: false,
+                message: "API key not found"
+            });
+        }
 
-const revokeApiKey = async(req,res)=>{
+        key.active = false;
 
-try{
+        await key.save();
 
+        return res.json({
+            success: true,
+            message: "API key revoked"
+        });
 
-const key=await ApiKey.findOne({
-
-_id:req.params.id,
-
-project:req.project._id
-
-});
-
-
-if(!key){
-
-return res.status(404).json({
-
-success:false,
-
-message:"API key not found"
-
-});
-
-}
-
-
-
-key.active=false;
-
-await key.save();
-
-
-
-res.json({
-
-success:true,
-
-message:"API key revoked"
-
-});
-
-
-}catch(error){
-
-res.status(500).json({
-
-success:false,
-
-message:error.message
-
-});
-
-}
-
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
 };
 
 
-
-
-module.exports={
-
-createApiKey,
-
-getApiKeys,
-
-revokeApiKey
-
+module.exports = {
+    createApiKey,
+    getApiKeys,
+    revokeApiKey
 };
