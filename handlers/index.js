@@ -1,155 +1,140 @@
 const fs = require("fs");
 const path = require("path");
 
-const Action = require("../models/Action");
-
-const registry = {};
+const registry = new Map();
 
 
+// ============================================================
+// REGISTER
+// ============================================================
 
-// Register handler
+function register(name, handler) {
 
-const register = (name, handler) => {
+    if (
+        !name ||
+        typeof handler !== "function"
+    ) {
+        throw new Error(
+            "Handler name and function are required"
+        );
+    }
 
-    registry[name] = handler;
-
-};
-
+    registry.set(name, handler);
+}
 
 
-// Recursively load handlers
+// ============================================================
+// LOAD HANDLER FILES DYNAMICALLY
+// ============================================================
 
-const loadDirectory = (dir) => {
+function loadHandlers(directory = __dirname) {
 
-    const items = fs.readdirSync(dir);
+    const entries =
+        fs.readdirSync(
+            directory,
+            {
+                withFileTypes: true
+            }
+        );
 
-    for (const item of items) {
+    for (const entry of entries) {
 
-        const fullPath = path.join(dir, item);
+        const fullPath =
+            path.join(
+                directory,
+                entry.name
+            );
 
-        const stat = fs.statSync(fullPath);
-
-        if (stat.isDirectory()) {
-
-            loadDirectory(fullPath);
-
+        if (entry.name === "index.js") {
             continue;
-
         }
 
-        if (!item.endsWith(".js")) {
+        if (entry.isDirectory()) {
+
+            loadHandlers(fullPath);
 
             continue;
-
         }
-
-        if (item === "index.js") {
-
-            continue;
-
-        }
-
-        const handler = require(fullPath);
 
         if (
-            handler &&
-            handler.name &&
-            typeof handler.execute === "function"
+            !entry.isFile() ||
+            !entry.name.endsWith(".js")
         ) {
-
-            register(
-                handler.name,
-                handler.execute
-            );
-
-            console.log(
-                "✓ Loaded handler:",
-                handler.name
-            );
-
+            continue;
         }
 
+        const handler =
+            require(fullPath);
+
+        if (
+            !handler ||
+            !handler.name ||
+            typeof handler.execute !== "function"
+        ) {
+            continue;
+        }
+
+        register(
+            handler.name,
+            handler.execute
+        );
+    }
+}
+
+
+// ============================================================
+// EXECUTE
+// ============================================================
+
+async function execute(
+    name,
+    context = {}
+) {
+
+    if (!name) {
+
+        throw new Error(
+            "Handler name is required"
+        );
     }
 
-};
-
-
-
-loadDirectory(__dirname);
-
-
-
-// Execute Action
-
-const execute = async (name, context) => {
-
-    const projectId =
-        context.projectId ||
-        context.project ||
-        context.event?.project;
-
-    const action = await Action.findOne({
-
-        project: projectId,
-
-        name,
-
-        enabled: true
-
-    });
-
-    if (!action) {
-
-        return {
-
-            success: false,
-
-            message: "Action not found",
-
-            action: name
-
-        };
-
+    if (!registry.size) {
+        loadHandlers();
     }
 
-    const handler = registry[name];
+    const handler =
+        registry.get(name);
 
     if (!handler) {
 
-        return {
-
-            success: false,
-
-            message: "Handler not registered",
-
-            action: name
-
-        };
-
+        throw new Error(
+            `Handler '${name}' is not registered`
+        );
     }
 
-    return await handler({
-
-        ...context,
-
-        actionConfig: action.config
-
-    });
-
-};
+    return handler(context);
+}
 
 
+// ============================================================
+// INITIAL LOAD
+// ============================================================
 
-const list = () => Object.keys(registry);
+loadHandlers();
 
 
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = {
 
-    execute,
-
     register,
 
-    list
+    execute,
+
+    loadHandlers,
+
+    registry
 
 };

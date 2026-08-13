@@ -1,74 +1,98 @@
 const Action = require("../models/Action");
 
 const {
-    register,
     list
 } = require("../handlers");
 
 
 const loadActions = async (projectId) => {
 
-    try {
-
-        const actions = await Action.find({
-            project: projectId,
-            enabled: true
-        });
+    if (!projectId) {
+        throw new Error("Project ID is required");
+    }
 
 
-        const registeredHandlers = new Set(list());
+    const actions = await Action.find({
+        project: projectId,
+        enabled: true
+    });
 
 
-        for (const action of actions) {
-
-            if (registeredHandlers.has(action.name)) {
-                continue;
-            }
-
-
-            register(
-                action.name,
-
-                async (context) => {
-
-                    console.log(
-                        "Dynamic action:",
-                        action.name
-                    );
-
-                    console.log(
-                        "Config:",
-                        action.config
-                    );
+    /*
+    |--------------------------------------------------------------------------
+    | IMPORTANT
+    |--------------------------------------------------------------------------
+    |
+    | The loader no longer creates fake handlers.
+    |
+    | A database Action must either:
+    |
+    | 1. Have a real registered handler
+    |
+    | OR
+    |
+    | 2. Be a universal action handled by universalActionEngine.
+    |
+    |--------------------------------------------------------------------------
+    */
 
 
-                    return {
-                        success: true,
-                        action: action.name
-                    };
+    const registeredHandlers =
+        new Set(list());
 
-                }
+
+    for (const action of actions) {
+
+        const config =
+            action.config || {};
+
+        const operation =
+            action.operation ||
+            config.operation ||
+            null;
+
+        const resource =
+            action.resource ||
+            config.resource ||
+            null;
+
+
+        const hasHandler =
+            registeredHandlers.has(
+                action.name
             );
 
 
-            registeredHandlers.add(action.name);
+        const isUniversal =
+            action.type === "universal" ||
+            (
+                resource &&
+                operation
+            );
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Report invalid action definitions.
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            !hasHandler &&
+            !isUniversal
+        ) {
+
+            console.warn(
+                "⚠ Action has no handler:",
+                action.name
+            );
 
         }
 
-
-        return actions;
-
-
-    } catch (error) {
-
-        console.error(
-            "Action loader error:",
-            error.message
-        );
-
-        throw error;
-
     }
+
+
+    return actions;
 
 };
 
