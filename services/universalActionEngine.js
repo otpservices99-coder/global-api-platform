@@ -1,39 +1,9 @@
-const User = require("../models/User");
-const Wallet = require("../models/Wallet");
-const Notification = require("../models/Notification");
-const Transaction = require("../models/Transaction");
-
-const resourceService = require("./resourceService");
+const resourceService =
+    require("./resourceService");
 
 
 // ============================================================
-// BUILT-IN RESOURCE MODELS
-// ============================================================
-
-const models = {
-    User,
-    Wallet,
-    Notification,
-    Transaction
-};
-
-
-// ============================================================
-// MODEL RESOLVER
-// ============================================================
-
-function getModel(resource) {
-
-    if (!resource) {
-        throw new Error("Resource is required");
-    }
-
-    return models[resource] || null;
-}
-
-
-// ============================================================
-// PATH RESOLVER
+// VALUE RESOLVER
 // ============================================================
 
 function getPath(object, path) {
@@ -42,27 +12,17 @@ function getPath(object, path) {
         return undefined;
     }
 
-    return path.split(".").reduce(
-        (current, key) => {
-
-            if (
-                current === null ||
-                current === undefined
-            ) {
-                return undefined;
-            }
-
-            return current[key];
-
-        },
-        object
-    );
+    return String(path)
+        .split(".")
+        .reduce(
+            (current, key) =>
+                current == null
+                    ? undefined
+                    : current[key],
+            object
+        );
 }
 
-
-// ============================================================
-// VARIABLE RESOLVER
-// ============================================================
 
 function resolveValue(value, context) {
 
@@ -70,15 +30,18 @@ function resolveValue(value, context) {
         return value;
     }
 
-    const exact = value.match(
-        /^{{\s*([^}]+)\s*}}$/
-    );
+    const exact =
+        value.match(
+            /^{{\s*([^}]+)\s*}}$/
+        );
 
     if (exact) {
+
         return getPath(
             context,
-            exact[1]
+            exact[1].trim()
         );
+
     }
 
     return value.replace(
@@ -86,9 +49,12 @@ function resolveValue(value, context) {
         (_, path) => {
 
             const result =
-                getPath(context, path);
+                getPath(
+                    context,
+                    path.trim()
+                );
 
-            return result === undefined
+            return result == null
                 ? ""
                 : String(result);
         }
@@ -97,18 +63,22 @@ function resolveValue(value, context) {
 
 
 // ============================================================
-// RECURSIVE OBJECT RESOLVER
+// RECURSIVE VALUE RESOLVER
 // ============================================================
 
-function resolveObject(value, context) {
+function resolveObject(
+    value,
+    context
+) {
 
     if (Array.isArray(value)) {
 
-        return value.map(item =>
-            resolveObject(
-                item,
-                context
-            )
+        return value.map(
+            item =>
+                resolveObject(
+                    item,
+                    context
+                )
         );
 
     }
@@ -120,7 +90,9 @@ function resolveObject(value, context) {
 
         const output = {};
 
-        for (const key of Object.keys(value)) {
+        for (
+            const key of Object.keys(value)
+        ) {
 
             output[key] =
                 resolveObject(
@@ -141,646 +113,306 @@ function resolveObject(value, context) {
 
 
 // ============================================================
-// BUILT-IN MODEL PROJECT SAFETY
+// RESOURCE OPERATION CHECK
 // ============================================================
 
-function addProjectFilter(
-    filter,
-    projectId,
-    Model
+function isOperationAllowed(
+    resourceDefinition,
+    operation
 ) {
 
-    if (
-        projectId &&
-        Model.schema.path("project")
-    ) {
-        filter.project = projectId;
+    const operations =
+        resourceDefinition
+            ?.settings
+            ?.operations;
+
+
+    /*
+     * If the Resource has no operation configuration,
+     * preserve generic backward compatibility.
+     *
+     * Once operations are defined, they become the
+     * Resource's explicit operation contract.
+     */
+
+    if (!operations) {
+        return true;
     }
 
-    return filter;
+
+    return operations[operation] === true;
 }
 
 
 // ============================================================
-// BUILT-IN MODEL: CREATE
+// DYNAMIC RESOURCE ACTION
 // ============================================================
 
-async function createModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const data =
-        resolveObject(
-            config.data || {},
-            context
-        );
-
-    if (
-        context.projectId &&
-        Model.schema.path("project")
-    ) {
-        data.project =
-            context.projectId;
-    }
-
-    const document =
-        await Model.create(data);
-
-    return {
-        success: true,
-        data: document
-    };
-}
-
-
-// ============================================================
-// BUILT-IN MODEL: FIND
-// ============================================================
-
-async function findModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const filter =
-        resolveObject(
-            config.filter || {},
-            context
-        );
-
-    addProjectFilter(
-        filter,
-        context.projectId,
-        Model
-    );
-
-    let query =
-        Model.find(filter);
-
-    if (Array.isArray(config.populate)) {
-
-        for (
-            const field of config.populate
-        ) {
-            query =
-                query.populate(field);
-        }
-    }
-
-    if (config.limit) {
-
-        query =
-            query.limit(
-                Number(config.limit)
-            );
-    }
-
-    const data =
-        await query;
-
-    return {
-        success: true,
-        data
-    };
-}
-
-
-// ============================================================
-// BUILT-IN MODEL: FIND ONE
-// ============================================================
-
-async function findOneModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const filter =
-        resolveObject(
-            config.filter || {},
-            context
-        );
-
-    addProjectFilter(
-        filter,
-        context.projectId,
-        Model
-    );
-
-    const data =
-        await Model.findOne(filter);
-
-    if (!data) {
-
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-    }
-
-    return {
-        success: true,
-        data
-    };
-}
-
-
-// ============================================================
-// BUILT-IN MODEL: UPDATE
-// ============================================================
-
-async function updateModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const filter =
-        resolveObject(
-            config.filter || {},
-            context
-        );
-
-    addProjectFilter(
-        filter,
-        context.projectId,
-        Model
-    );
-
-    const update =
-        resolveObject(
-            config.update || {},
-            context
-        );
-
-    const document =
-        await Model.findOneAndUpdate(
-            filter,
-            update,
-            {
-                new: true,
-                runValidators: true
-            }
-        );
-
-    if (!document) {
-
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-    }
-
-    return {
-        success: true,
-        data: document
-    };
-}
-
-
-// ============================================================
-// BUILT-IN MODEL: DELETE
-// ============================================================
-
-async function deleteModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const filter =
-        resolveObject(
-            config.filter || {},
-            context
-        );
-
-    addProjectFilter(
-        filter,
-        context.projectId,
-        Model
-    );
-
-    const result =
-        await Model.deleteOne(filter);
-
-    if (result.deletedCount === 0) {
-
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-    }
-
-    return {
-        success: true,
-        deleted: true
-    };
-}
-
-
-// ============================================================
-// BUILT-IN MODEL: INCREMENT
-// ============================================================
-
-async function incrementModelResource(
-    Model,
-    config,
-    context
-) {
-
-    const filter =
-        resolveObject(
-            config.filter || {},
-            context
-        );
-
-    addProjectFilter(
-        filter,
-        context.projectId,
-        Model
-    );
-
-    const field =
-        config.field;
-
-    if (!field) {
-
-        throw new Error(
-            "Increment field is required"
-        );
-    }
-
-    const amount =
-        Number(
-            resolveValue(
-                config.amount ?? 1,
-                context
-            )
-        );
-
-    if (!Number.isFinite(amount)) {
-
-        throw new Error(
-            "Invalid increment amount"
-        );
-    }
-
-    const document =
-        await Model.findOneAndUpdate(
-            filter,
-            {
-                $inc: {
-                    [field]: amount
-                }
-            },
-            {
-                new: true
-            }
-        );
-
-    if (!document) {
-
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-    }
-
-    return {
-        success: true,
-        data: document
-    };
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: CREATE
-// ============================================================
-
-async function createDynamicResource(
+async function executeDynamicAction(
     resource,
-    config,
-    context
-) {
-
-    return resourceService.create({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        data:
-            resolveObject(
-                config.data || {},
-                context
-            ),
-
-        metadata:
-            resolveObject(
-                config.metadata || {},
-                context
-            )
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: FIND
-// ============================================================
-
-async function findDynamicResource(
-    resource,
-    config,
-    context
-) {
-
-    return resourceService.find({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        filter:
-            resolveObject(
-                config.filter || {},
-                context
-            ),
-
-        options:
-            resolveObject(
-                config.options || {},
-                context
-            )
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: FIND ONE
-// ============================================================
-
-async function findOneDynamicResource(
-    resource,
-    config,
-    context
-) {
-
-    const id =
-        resolveValue(
-            config.id,
-            context
-        );
-
-    return resourceService.findOne({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        id
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: UPDATE
-// ============================================================
-
-async function updateDynamicResource(
-    resource,
-    config,
-    context
-) {
-
-    const id =
-        resolveValue(
-            config.id,
-            context
-        );
-
-    const data =
-        resolveObject(
-            config.data || {},
-            context
-        );
-
-    return resourceService.update({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        id,
-
-        data,
-
-        replace:
-            config.replace !== false
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: DELETE
-// ============================================================
-
-async function deleteDynamicResource(
-    resource,
-    config,
-    context
-) {
-
-    const id =
-        resolveValue(
-            config.id,
-            context
-        );
-
-    return resourceService.remove({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        id
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE: INCREMENT / DECREMENT
-// ============================================================
-
-async function incrementDynamicResource(
-    resource,
-    config,
-    context
-) {
-
-    const id =
-        resolveValue(
-            config.id,
-            context
-        );
-
-    const field =
-        config.field;
-
-    const amount =
-        Number(
-            resolveValue(
-                config.amount ?? 1,
-                context
-            )
-        );
-
-    if (!id) {
-
-        return {
-            success: false,
-            message: "Record ID is required"
-        };
-    }
-
-    if (!field) {
-
-        return {
-            success: false,
-            message: "Increment field is required"
-        };
-    }
-
-    if (!Number.isFinite(amount)) {
-
-        return {
-            success: false,
-            message: "Invalid increment amount"
-        };
-    }
-
-    const existing =
-        await resourceService.findOne({
-
-            projectId:
-                context.projectId,
-
-            resource,
-
-            id
-
-        });
-
-    if (!existing.success) {
-        return existing;
-    }
-
-    const current =
-        Number(
-            existing.data.data?.[field] || 0
-        );
-
-    return resourceService.update({
-
-        projectId:
-            context.projectId,
-
-        resource,
-
-        id,
-
-        data: {
-            [field]:
-                current + amount
-        },
-
-        replace: false
-
-    });
-}
-
-
-// ============================================================
-// DYNAMIC RESOURCE EXECUTOR
-// ============================================================
-
-async function executeDynamicResourceAction(
     operation,
-    resource,
     config,
     context
 ) {
 
     switch (operation) {
 
+        // ====================================================
+        // CREATE
+        // ====================================================
+
         case "create":
 
-            return createDynamicResource(
+            return resourceService.create({
+
+                projectId:
+                    context.projectId,
+
                 resource,
-                config,
-                context
-            );
+
+                data:
+                    resolveObject(
+                        config.data || {},
+                        context
+                    ),
+
+                metadata:
+                    resolveObject(
+                        config.metadata || {},
+                        context
+                    )
+
+            });
+
+
+        // ====================================================
+        // FIND / READ
+        // ====================================================
 
         case "find":
-
         case "read":
 
-            return findDynamicResource(
+            return resourceService.find({
+
+                projectId:
+                    context.projectId,
+
                 resource,
-                config,
-                context
-            );
+
+                filter:
+                    resolveObject(
+                        config.filter || {},
+                        context
+                    ),
+
+                options:
+                    resolveObject(
+                        config.options || {},
+                        context
+                    )
+
+            });
+
+
+        // ====================================================
+        // FIND ONE
+        // ====================================================
 
         case "findOne":
 
-            return findOneDynamicResource(
+            return resourceService.findOne({
+
+                projectId:
+                    context.projectId,
+
                 resource,
-                config,
-                context
-            );
+
+                id:
+                    resolveValue(
+                        config.id,
+                        context
+                    )
+
+            });
+
+
+        // ====================================================
+        // UPDATE
+        // ====================================================
 
         case "update":
 
-            return updateDynamicResource(
+            return resourceService.update({
+
+                projectId:
+                    context.projectId,
+
                 resource,
-                config,
-                context
-            );
+
+                id:
+                    resolveValue(
+                        config.id,
+                        context
+                    ),
+
+                data:
+                    resolveObject(
+                        config.data || {},
+                        context
+                    ),
+
+                replace:
+                    config.replace !== false
+
+            });
+
+
+        // ====================================================
+        // DELETE
+        // ====================================================
 
         case "delete":
 
-            return deleteDynamicResource(
-                resource,
-                config,
-                context
-            );
+            return resourceService.remove({
 
-        case "increment":
+                projectId:
+                    context.projectId,
 
-            return incrementDynamicResource(
                 resource,
-                config,
-                context
-            );
+
+                id:
+                    resolveValue(
+                        config.id,
+                        context
+                    )
+
+            });
+
+
+        // ====================================================
+        // INCREMENT
+        // ====================================================
+
+        case "increment": {
+
+            const id =
+                resolveValue(
+                    config.id,
+                    context
+                );
+
+            const field =
+                config.field;
+
+            const amount =
+                Number(
+                    resolveValue(
+                        config.amount ?? 1,
+                        context
+                    )
+                );
+
+
+            if (!id) {
+
+                return {
+                    success: false,
+
+                    message:
+                        "Record ID is required"
+                };
+
+            }
+
+
+            if (!field) {
+
+                return {
+                    success: false,
+
+                    message:
+                        "Field is required"
+                };
+
+            }
+
+
+            if (!Number.isFinite(amount)) {
+
+                return {
+                    success: false,
+
+                    message:
+                        "Invalid increment amount"
+                };
+
+            }
+
+
+            const existing =
+                await resourceService.findOne({
+
+                    projectId:
+                        context.projectId,
+
+                    resource,
+
+                    id
+
+                });
+
+
+            if (!existing.success) {
+
+                return existing;
+
+            }
+
+
+            const current =
+                Number(
+                    existing.data?.data?.[field] || 0
+                );
+
+
+            return resourceService.update({
+
+                projectId:
+                    context.projectId,
+
+                resource,
+
+                id,
+
+                data: {
+
+                    [field]:
+                        current + amount
+
+                },
+
+                replace: false
+
+            });
+
+        }
+
+
+        // ====================================================
+        // DECREMENT
+        // ====================================================
 
         case "decrement":
 
-            return incrementDynamicResource(
+            return executeDynamicAction(
+
                 resource,
+
+                "increment",
+
                 {
                     ...config,
+
                     amount:
                         -Math.abs(
                             Number(
@@ -790,23 +422,36 @@ async function executeDynamicResourceAction(
                                 )
                             )
                         )
+
                 },
+
                 context
+
             );
+
+
+        // ====================================================
+        // UNSUPPORTED OPERATION
+        // ====================================================
 
         default:
 
             return {
+
                 success: false,
+
                 message:
-                    `Unsupported action operation: ${operation}`
+                    `Unsupported operation: ${operation}`
+
             };
+
     }
+
 }
 
 
 // ============================================================
-// MAIN UNIVERSAL ACTION EXECUTOR
+// UNIVERSAL ACTION EXECUTOR
 // ============================================================
 
 async function executeUniversalAction({
@@ -821,39 +466,143 @@ async function executeUniversalAction({
     if (!actionRecord) {
 
         return {
+
             success: false,
-            message: "Action definition is required"
+
+            message:
+                "Action definition is required"
+
         };
+
     }
+
+
+    if (!projectId) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Project ID is required"
+
+        };
+
+    }
+
 
     const config =
         actionRecord.config || {};
 
-    const operation =
-        config.operation ||
-        actionRecord.operation;
 
     const resource =
-        config.resource ||
-        actionRecord.resource;
+        resolveValue(
+            config.resource,
+            {
+                projectId,
+                actorId,
+                userId,
+                data,
+                req
+            }
+        );
 
-    if (!operation) {
 
-        return {
-            success: false,
-            message:
-                "Action operation is not defined"
-        };
-    }
+    const operation =
+        resolveValue(
+            config.operation,
+            {
+                projectId,
+                actorId,
+                userId,
+                data,
+                req
+            }
+        );
+
 
     if (!resource) {
 
         return {
+
             success: false,
+
             message:
                 "Action resource is not defined"
+
         };
+
     }
+
+
+    if (!operation) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Action operation is not defined"
+
+        };
+
+    }
+
+
+    // ========================================================
+    // GET RESOURCE DEFINITION
+    // ========================================================
+
+    const resourceDefinition =
+        await resourceService.getResource({
+
+            projectId,
+
+            resource
+
+        });
+
+
+    if (!resourceDefinition) {
+
+        return {
+
+            success: false,
+
+            message:
+                `Resource '${resource}' is not available`
+
+        };
+
+    }
+
+
+    // ========================================================
+    // CHECK RESOURCE OPERATION
+    // ========================================================
+
+    if (
+        !isOperationAllowed(
+            resourceDefinition,
+            operation
+        )
+    ) {
+
+        return {
+
+            success: false,
+
+            message:
+                `Operation '${operation}' is not enabled for resource '${resource}'`
+
+        };
+
+    }
+
+
+    // ========================================================
+    // EXECUTION CONTEXT
+    // ========================================================
 
     const context = {
 
@@ -865,142 +614,33 @@ async function executeUniversalAction({
 
         data,
 
-        req
+        req,
+
+        action:
+            actionRecord,
+
+        resource:
+            resourceDefinition
+
     };
 
 
     // ========================================================
-    // DYNAMIC RESOURCE FIRST
+    // EXECUTE GENERIC OPERATION
     // ========================================================
 
-    const dynamicResource =
-        await resourceService.getResource({
+    return executeDynamicAction(
 
-            projectId,
+        resource,
 
-            resource
+        operation,
 
-        });
+        config,
 
+        context
 
-    if (dynamicResource) {
+    );
 
-        return executeDynamicResourceAction(
-
-            operation,
-
-            resource,
-
-            config,
-
-            context
-
-        );
-
-    }
-
-
-    // ========================================================
-    // BUILT-IN MODEL SECOND
-    // ========================================================
-
-    const Model =
-        getModel(resource);
-
-    if (!Model) {
-
-        return {
-            success: false,
-            message:
-                `Unknown resource: ${resource}`
-        };
-    }
-
-
-    switch (operation) {
-
-        case "create":
-
-            return createModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "find":
-
-        case "read":
-
-            return findModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "findOne":
-
-            return findOneModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "update":
-
-            return updateModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "delete":
-
-            return deleteModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "increment":
-
-            return incrementModelResource(
-                Model,
-                config,
-                context
-            );
-
-        case "decrement":
-
-            return incrementModelResource(
-
-                Model,
-
-                {
-                    ...config,
-
-                    amount:
-                        -Math.abs(
-                            Number(
-                                resolveValue(
-                                    config.amount ?? 1,
-                                    context
-                                )
-                            )
-                        )
-                },
-
-                context
-
-            );
-
-        default:
-
-            return {
-                success: false,
-                message:
-                    `Unsupported action operation: ${operation}`
-            };
-    }
 }
 
 

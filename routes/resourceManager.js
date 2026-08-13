@@ -1,39 +1,78 @@
 const express = require("express");
 
-const router = express.Router();
+const router =
+    express.Router();
 
 
 const project =
-require("../middleware/project");
+    require("../middleware/project");
 
 
 const controller =
-require("../controllers/resourceManagerController");
+    require("../controllers/resourceManagerController");
 
 
-
-// Every request requires project API key
+// ============================================================
+// PROJECT API KEY REQUIRED
+// ============================================================
 
 router.use(project);
 
 
-
-// Create a resource definition
+// ============================================================
+// CREATE RESOURCE
+// POST /api/v1/resource-manager
+// ============================================================
 
 router.post(
-"/",
-controller.create
+    "/",
+    controller.create
 );
 
 
-
-// List project resources
+// ============================================================
+// LIST RESOURCES
+// GET /api/v1/resource-manager
+// ============================================================
 
 router.get(
-"/",
-controller.list
+    "/",
+    controller.list
 );
 
 
+// ============================================================
+// GET SINGLE RESOURCE
+// GET /api/v1/resource-manager/:id
+// ============================================================
 
-module.exports = router;
+router.get(
+    "/:id",
+    controller.getOne
+);
+
+
+// ============================================================
+// UPDATE RESOURCE
+// PUT /api/v1/resource-manager/:id
+// ============================================================
+
+router.put(
+    "/:id",
+    controller.update
+);
+
+
+// ============================================================
+// DELETE RESOURCE
+// DELETE /api/v1/resource-manager/:id
+// ============================================================
+
+router.delete(
+    "/:id",
+    controller.remove
+);
+
+
+module.exports =
+    router;
