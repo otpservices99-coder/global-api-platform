@@ -3,7 +3,7 @@ const resourceService =
 
 
 // ============================================================
-// VARIABLE RESOLUTION
+// PATH / VARIABLE RESOLUTION
 // ============================================================
 
 function getPath(object, path) {
@@ -115,7 +115,10 @@ function resolveObject(value, context) {
 // MERGE DATA
 // ============================================================
 
-function mergeObjects(base = {}, override = {}) {
+function mergeObjects(
+    base = {},
+    override = {}
+) {
 
     if (
         !base ||
@@ -141,6 +144,94 @@ function mergeObjects(base = {}, override = {}) {
 
 
 // ============================================================
+// RESOLVE RECORD ID
+// ============================================================
+//
+// Universal ID resolution.
+//
+// Priority:
+//
+// 1. Explicit configured ID
+// 2. Runtime data.id
+// 3. Runtime data._id
+// 4. Runtime data.user
+// 5. Runtime data.userId
+// 6. Runtime context userId
+// 7. Event entityId
+//
+// This allows actions such as:
+//
+// wallet.credit
+// wallet.debit
+// user.status_update
+// user.role_update
+//
+// to receive their target dynamically without requiring
+// every Action record to contain a hard-coded "id" field.
+// ============================================================
+
+function resolveRecordId(
+    config = {},
+    context = {}
+) {
+
+    const explicitId =
+        config.id;
+
+    if (
+        explicitId !== undefined &&
+        explicitId !== null &&
+        explicitId !== ""
+    ) {
+
+        return explicitId;
+    }
+
+
+    const data =
+        context.data || {};
+
+
+    const candidates = [
+
+        data.id,
+
+        data._id,
+
+        data.user,
+
+        data.userId,
+
+        context.userId,
+
+        context.entityId,
+
+        context.event?.entityId,
+
+        context.event?.userId
+
+    ];
+
+
+    for (const candidate of candidates) {
+
+        if (
+            candidate !== undefined &&
+            candidate !== null &&
+            candidate !== ""
+        ) {
+
+            return candidate;
+        }
+
+    }
+
+
+    return null;
+}
+
+
+// ============================================================
 // RESOLVE DATABASE OPERATION
 // ============================================================
 
@@ -160,11 +251,11 @@ async function resolveOperation({
     const definition =
         operations[operation];
 
+
     /*
      * No custom definition.
      *
-     * Fall back to the built-in generic CRUD
-     * operations.
+     * Fall back to generic CRUD operations.
      */
 
     if (
@@ -179,11 +270,13 @@ async function resolveOperation({
 
     }
 
+
     const resolvedDefinition =
         resolveObject(
             definition,
             context
         );
+
 
     /*
      * Database operation alias.
@@ -192,10 +285,10 @@ async function resolveOperation({
      *
      * unsuspend:
      * {
-     *   operation: "update",
-     *   data: {
-     *      status: "active"
-     *   }
+     *     operation: "update",
+     *     data: {
+     *         status: "active"
+     *     }
      * }
      */
 
@@ -203,14 +296,15 @@ async function resolveOperation({
         resolvedDefinition.operation ||
         operation;
 
+
     const mergedConfig = {
         ...config,
         ...resolvedDefinition
     };
 
+
     /*
-     * Runtime action data must be able to
-     * override configured values when supplied.
+     * Runtime action data overrides configured data.
      */
 
     if (
@@ -228,12 +322,15 @@ async function resolveOperation({
 
     }
 
+
     return {
+
         operation:
             actualOperation,
 
         config:
             mergedConfig
+
     };
 }
 
@@ -248,11 +345,31 @@ async function increment(
     context
 ) {
 
+    /*
+     * Resolve the record dynamically.
+     *
+     * Explicit config.id still has priority.
+     *
+     * Otherwise runtime values such as:
+     *
+     * data.id
+     * data.user
+     * data.userId
+     * context.userId
+     *
+     * are accepted.
+     */
+
     const id =
-        config.id;
+        resolveRecordId(
+            config,
+            context
+        );
+
 
     const field =
         config.field;
+
 
     const amount =
         Number(
@@ -365,8 +482,7 @@ async function executeResourceAction(
 
 
     /*
-     * Load the resource definition from the
-     * database.
+     * Load resource definition from database.
      */
 
     const resourceDocument =
@@ -390,8 +506,7 @@ async function executeResourceAction(
 
 
     /*
-     * Resolve custom operation from the
-     * resource's database settings.
+     * Resolve custom resource operation.
      */
 
     const resolved =
@@ -421,13 +536,11 @@ async function executeResourceAction(
 
     /*
      * Check operation permissions.
-     *
-     * Generic operations and custom operations
-     * are both controlled by Resource settings.
      */
 
     const operations =
         resourceDocument.settings?.operations || {};
+
 
     const operationDefinition =
         operations[operation];
@@ -445,7 +558,7 @@ async function executeResourceAction(
 
 
     /*
-     * If the custom operation exists but does not
+     * If a custom operation exists but does not
      * resolve to a valid operation, reject it.
      */
 
@@ -464,9 +577,10 @@ async function executeResourceAction(
 
     switch (actualOperation) {
 
-        // ----------------------------------------------------
+
+        // ====================================================
         // CREATE
-        // ----------------------------------------------------
+        // ====================================================
 
         case "create":
 
@@ -486,9 +600,9 @@ async function executeResourceAction(
             });
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // FIND
-        // ----------------------------------------------------
+        // ====================================================
 
         case "find":
 
@@ -510,9 +624,9 @@ async function executeResourceAction(
             });
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // FIND ONE
-        // ----------------------------------------------------
+        // ====================================================
 
         case "findOne":
 
@@ -526,14 +640,17 @@ async function executeResourceAction(
                 resource,
 
                 id:
-                    resolvedConfig.id
+                    resolveRecordId(
+                        resolvedConfig,
+                        context
+                    )
 
             });
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // UPDATE
-        // ----------------------------------------------------
+        // ====================================================
 
         case "update":
 
@@ -545,7 +662,10 @@ async function executeResourceAction(
                 resource,
 
                 id:
-                    resolvedConfig.id,
+                    resolveRecordId(
+                        resolvedConfig,
+                        context
+                    ),
 
                 data:
                     resolvedConfig.data || {},
@@ -556,9 +676,9 @@ async function executeResourceAction(
             });
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // DELETE
-        // ----------------------------------------------------
+        // ====================================================
 
         case "delete":
 
@@ -572,14 +692,17 @@ async function executeResourceAction(
                 resource,
 
                 id:
-                    resolvedConfig.id
+                    resolveRecordId(
+                        resolvedConfig,
+                        context
+                    )
 
             });
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // INCREMENT
-        // ----------------------------------------------------
+        // ====================================================
 
         case "increment":
 
@@ -594,9 +717,9 @@ async function executeResourceAction(
             );
 
 
-        // ----------------------------------------------------
+        // ====================================================
         // DECREMENT
-        // ----------------------------------------------------
+        // ====================================================
 
         case "decrement":
 
@@ -712,14 +835,6 @@ async function executeUniversalAction({
 
     /*
      * Build runtime configuration.
-     *
-     * Action config can contain:
-     *
-     * {
-     *   resource: "user",
-     *   operation: "unsuspend",
-     *   id: "{{data.user}}"
-     * }
      */
 
     const runtimeConfig = {
@@ -728,13 +843,50 @@ async function executeUniversalAction({
 
 
     /*
-     * If an ID was supplied through event data,
-     * allow:
+     * Resolve configured values first.
+     *
+     * Example:
      *
      * id: "{{data.user}}"
      *
-     * to resolve normally.
+     * becomes the actual runtime user ID.
      */
+
+    const resolvedRuntimeConfig =
+        resolveObject(
+            runtimeConfig,
+            context
+        );
+
+
+    /*
+     * If the Action did not explicitly define an ID,
+     * the generic engine will resolve it automatically
+     * from the runtime context.
+     */
+
+    if (
+        resolvedRuntimeConfig.id === undefined ||
+        resolvedRuntimeConfig.id === null ||
+        resolvedRuntimeConfig.id === ""
+    ) {
+
+        const dynamicId =
+            resolveRecordId(
+                resolvedRuntimeConfig,
+                context
+            );
+
+
+        if (dynamicId) {
+
+            resolvedRuntimeConfig.id =
+                dynamicId;
+
+        }
+
+    }
+
 
     return executeResourceAction(
 
@@ -742,17 +894,16 @@ async function executeUniversalAction({
 
         operation,
 
-        runtimeConfig,
+        resolvedRuntimeConfig,
 
         context
 
     );
-
 }
 
 
 // ============================================================
-// EXPORT
+// EXPORTS
 // ============================================================
 
 module.exports = {
@@ -763,6 +914,8 @@ module.exports = {
 
     resolveObject,
 
-    resolveOperation
+    resolveOperation,
+
+    resolveRecordId
 
 };
