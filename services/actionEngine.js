@@ -2,9 +2,31 @@ const {
     executeUniversalAction
 } = require("./universalActionEngine");
 
+const handlers = require("../handlers");
+
 
 // ============================================================
-// EXECUTE ACTION
+// EXECUTE SINGLE ACTION
+// ============================================================
+//
+// Priority:
+//
+// 1. Registered handler
+// 2. Universal resource/operation action
+//
+// This is important because an action such as:
+//
+//     wallet.credit
+//
+// has a real business handler and must not accidentally be
+// redirected into generic CRUD/increment logic.
+//
+// New actions that do not have a registered handler can still
+// work dynamically through:
+//
+//     config.resource
+//     config.operation
+//
 // ============================================================
 
 async function executeAction(
@@ -13,11 +35,20 @@ async function executeAction(
 ) {
 
     if (!action) {
-        throw new Error("Action is required");
+
+        throw new Error(
+            "Action is required"
+        );
+
     }
 
+
     if (action.enabled === false) {
-        throw new Error("Action is disabled");
+
+        throw new Error(
+            "Action is disabled"
+        );
+
     }
 
 
@@ -25,25 +56,73 @@ async function executeAction(
         action.config || {};
 
 
-    /*
-     * --------------------------------------------------------
-     * UNIVERSAL DYNAMIC ACTION
-     * --------------------------------------------------------
-     *
-     * Resource and operation come entirely from the
-     * database Action configuration.
-     *
-     * No action-name list exists here.
-     *
-     * Example database configuration:
-     *
-     * {
-     *     resource: "anything",
-     *     operation: "update"
-     * }
-     *
-     * --------------------------------------------------------
-     */
+    // ========================================================
+    // 1. EXPLICIT HANDLER FIRST
+    // ========================================================
+
+    if (
+        typeof handlers.execute === "function"
+    ) {
+
+        try {
+
+            return await handlers.execute(
+
+                action.name,
+
+                {
+                    ...context,
+
+                    action
+
+                }
+
+            );
+
+        } catch (error) {
+
+            /*
+             * Only fall through to the universal engine when
+             * the handler does not actually exist.
+             *
+             * A real handler throwing an error must NOT be
+             * silently replaced by universal execution.
+             */
+
+            const message =
+                String(
+                    error?.message || ""
+                );
+
+            const isMissingHandler =
+                message ===
+                `Handler '${action.name}' is not registered`;
+
+            if (!isMissingHandler) {
+
+                throw error;
+
+            }
+
+        }
+
+    }
+
+
+    // ========================================================
+    // 2. UNIVERSAL DYNAMIC ACTION
+    // ========================================================
+    //
+    // No registered handler exists.
+    //
+    // If the Action definition contains:
+    //
+    //     resource
+    //     operation
+    //
+    // the universal engine handles it dynamically.
+    //
+    // ========================================================
 
     if (
         config.resource &&
@@ -75,47 +154,14 @@ async function executeAction(
     }
 
 
-    /*
-     * --------------------------------------------------------
-     * EXPLICIT HANDLER
-     * --------------------------------------------------------
-     *
-     * Only used when an Action does not define a universal
-     * resource/operation.
-     *
-     * The engine itself does not know the handler names.
-     * The handler registry discovers them dynamically.
-     *
-     * --------------------------------------------------------
-     */
-
-    const handlers =
-        require("../handlers");
-
-
-    if (
-        typeof handlers.execute === "function"
-    ) {
-
-        return handlers.execute(
-
-            action.name,
-
-            {
-                ...context,
-
-                action
-
-            }
-
-        );
-
-    }
-
+    // ========================================================
+    // 3. NOTHING CAN EXECUTE THE ACTION
+    // ========================================================
 
     throw new Error(
         `No executor found for action '${action.name}'`
     );
+
 }
 
 
@@ -183,6 +229,7 @@ async function processActions(
 
 
     return results;
+
 }
 
 
