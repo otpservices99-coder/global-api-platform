@@ -6,512 +6,209 @@ const Wallet = require("../../models/Wallet");
 
 const audit = require("../../services/auditService");
 
-
-/*
- * ============================================================
- * WITHDRAWAL REJECTION HANDLER
- * ============================================================
- *
- * Global / project-aware action handler.
- *
- * No hard-coded:
- * - project IDs
- * - user IDs
- * - wallet IDs
- * - withdrawal amounts
- * - currency
- * - project-specific business rules
- *
- * Everything is resolved dynamically from:
- * - Action Engine context
- * - Withdrawal document
- * - Wallet document
- * - Transaction documents
- *
- * Financial operation:
- *
- *   pending withdrawal
- *          ↓
- *   MongoDB transaction
- *          ├── refund wallet balance
- *          ├── release pendingBalance
- *          ├── mark withdrawal rejected
- *          ├── mark request transaction rejected
- *          └── create refund transaction
- *          ↓
- *   successful transaction
- *          ↓
- *   audit
- *
- * ============================================================
- */
-
 module.exports = {
 
     name: "withdrawal.reject",
 
-
     execute: async (ctx) => {
 
-        const withdrawalId =
-            ctx?.data?.withdrawalId;
-
         const projectId =
-            ctx?.projectId;
+            ctx?.projectId ||
+            ctx?.project?._id ||
+            ctx?.event?.project;
 
         const actorId =
             ctx?.actorId || null;
 
+        const data =
+            ctx?.data || {};
 
-        /*
-         * ----------------------------------------------------
-         * Validate action context
-         * ----------------------------------------------------
-         */
+        const withdrawalId =
+            data.withdrawalId ||
+            data.withdrawal ||
+            data.id ||
+            data._id;
 
         if (!projectId) {
-
-            throw new Error(
-                "Project ID is required"
-            );
-
+            return {
+                success: false,
+                message: "Project ID is required"
+            };
         }
-
 
         if (!withdrawalId) {
-
-            throw new Error(
-                "Withdrawal ID is required"
-            );
-
+            return {
+                success: false,
+                message: "Withdrawal ID is required"
+            };
         }
-
-
-        /*
-         * ----------------------------------------------------
-         * Rejection reason
-         * ----------------------------------------------------
-         */
-
-        const rejectionReason =
-            ctx?.data?.rejectionReason ||
-            "Withdrawal rejected";
-
-
-        /*
-         * ----------------------------------------------------
-         * Start MongoDB transaction.
-         * ----------------------------------------------------
-         */
 
         const session =
             await mongoose.startSession();
-
 
         try {
 
             let rejectedWithdrawal = null;
 
+            await session.withTransaction(async () => {
 
-            await session.withTransaction(
-                async () => {
+                const withdrawal =
+                    await Withdrawal.findOne({
+                        _id: withdrawalId,
+                        project: projectId
+                    }).session(session);
 
-                    /*
-                     * ------------------------------------------------
-                     * Find withdrawal.
-                     *
-                     * Project ownership is ALWAYS enforced.
-                     * ------------------------------------------------
-                     */
+                if (!withdrawal) {
+                    throw new Error(
+                        "Withdrawal not found"
+                    );
+                }
 
-                    const withdrawal =
-                        await Withdrawal.findOne({
+                if (withdrawal.status !== "pending") {
+                    throw new Error(
+                        "Withdrawal already processed"
+                    );
+                }
 
-                            _id: withdrawalId,
+                const amount =
+                    Number(withdrawal.amount);
 
-                            project: projectId
+                if (
+                    !Number.isFinite(amount) ||
+                    amount <= 0
+                ) {
+                    throw new Error(
+                        "Invalid withdrawal amount"
+                    );
+                }
 
-                        }).session(session);
+                const wallet =
+                    await Wallet.findOne({
+                        project: projectId,
+                        user: withdrawal.user
+                    }).session(session);
 
+                if (!wallet) {
+                    throw new Error(
+                        "Wallet not found"
+                    );
+                }
 
-                    if (!withdrawal) {
+                if (
+                    Number(wallet.pendingBalance) < amount
+                ) {
+                    throw new Error(
+                        "Insufficient pending balance"
+                    );
+                }
 
-                        throw new Error(
-                            "Withdrawal not found"
-                        );
+                /*
+                 * Release the reserved withdrawal amount.
+                 */
+                wallet.balance =
+                    Number(wallet.balance) + amount;
 
-                    }
+                wallet.pendingBalance =
+                    Number(wallet.pendingBalance) - amount;
 
+                await wallet.save({
+                    session
+                });
 
-                    /*
-                     * ------------------------------------------------
-                     * Only pending withdrawals may be rejected.
-                     *
-                     * This also prevents a second rejection from
-                     * refunding the user again.
-                     * ------------------------------------------------
-                     */
+                /*
+                 * Mark withdrawal rejected.
+                 */
+                withdrawal.status =
+                    "rejected";
 
-                    if (
-                        withdrawal.status !== "pending"
-                    ) {
+                withdrawal.processedAt =
+                    new Date();
 
-                        throw new Error(
-                            "Withdrawal already processed"
-                        );
+                withdrawal.processedBy =
+                    actorId || null;
 
-                    }
+                withdrawal.rejectionReason =
+                    data.reason ||
+                    data.rejectionReason ||
+                    "Withdrawal rejected";
 
+                await withdrawal.save({
+                    session
+                });
 
-                    /*
-                     * ------------------------------------------------
-                     * Validate withdrawal amount.
-                     * ------------------------------------------------
-                     */
+                /*
+                 * Update the associated transaction.
+                 */
+                const transaction =
+                    await Transaction.findOne({
+                        project: projectId,
+                        withdrawal: withdrawal._id
+                    }).session(session);
 
-                    const amount =
-                        Number(withdrawal.amount);
+                if (transaction) {
 
-
-                    if (
-                        !Number.isFinite(amount) ||
-                        amount <= 0
-                    ) {
-
-                        throw new Error(
-                            "Invalid withdrawal amount"
-                        );
-
-                    }
-
-
-                    /*
-                     * ------------------------------------------------
-                     * Find wallet belonging to the same project
-                     * and withdrawal owner.
-                     * ------------------------------------------------
-                     */
-
-                    const wallet =
-                        await Wallet.findOne({
-
-                            project: projectId,
-
-                            user: withdrawal.user
-
-                        }).session(session);
-
-
-                    if (!wallet) {
-
-                        throw new Error(
-                            "Wallet not found"
-                        );
-
-                    }
-
-
-                    /*
-                     * ------------------------------------------------
-                     * The withdrawal amount must still be reserved
-                     * in pendingBalance.
-                     *
-                     * This prevents refunding money that is no
-                     * longer reserved.
-                     * ------------------------------------------------
-                     */
-
-                    const pendingBalance =
-                        Number(wallet.pendingBalance);
-
-
-                    if (
-                        !Number.isFinite(pendingBalance) ||
-                        pendingBalance < amount
-                    ) {
-
-                        throw new Error(
-                            "Insufficient pending balance"
-                        );
-
-                    }
-
-
-                    /*
-                     * ------------------------------------------------
-                     * Refund the reserved money.
-                     *
-                     * balance:
-                     * increases because the withdrawal was rejected.
-                     *
-                     * pendingBalance:
-                     * decreases because the reservation is released.
-                     *
-                     * totalWithdrawn:
-                     * remains unchanged.
-                     * ------------------------------------------------
-                     */
-
-                    wallet.balance =
-                        Number(wallet.balance) +
-                        amount;
-
-
-                    wallet.pendingBalance =
-                        pendingBalance -
-                        amount;
-
-
-                    await wallet.save({
-                        session
-                    });
-
-
-                    /*
-                     * ------------------------------------------------
-                     * Mark withdrawal as rejected.
-                     * ------------------------------------------------
-                     */
-
-                    withdrawal.status =
+                    transaction.status =
                         "rejected";
 
-
-                    withdrawal.processedAt =
-                        new Date();
-
-
-                    withdrawal.processedBy =
-                        actorId;
-
-
-                    withdrawal.rejectionReason =
-                        rejectionReason;
-
-
-                    await withdrawal.save({
+                    await transaction.save({
                         session
                     });
 
-
-                    /*
-                     * ------------------------------------------------
-                     * Find the original withdrawal request transaction.
-                     *
-                     * The relationship is scoped by:
-                     * - project
-                     * - user
-                     * - withdrawal
-                     * - transaction type
-                     * ------------------------------------------------
-                     */
-
-                    const transaction =
-                        await Transaction.findOne({
-
-                            project: projectId,
-
-                            user: withdrawal.user,
-
-                            withdrawal: withdrawal._id,
-
-                            type: "withdrawal_request"
-
-                        }).session(session);
-
-
-                    if (transaction) {
-
-                        /*
-                         * Keep the original request transaction but
-                         * mark it rejected.
-                         */
-
-                        transaction.status =
-                            "rejected";
-
-
-                        transaction.description =
-                            "Withdrawal rejected";
-
-
-                        await transaction.save({
-                            session
-                        });
-
-                    } else {
-
-                        /*
-                         * ------------------------------------------------
-                         * Compatibility fallback for legacy withdrawals
-                         * without a linked withdrawal_request transaction.
-                         * ------------------------------------------------
-                         */
-
-                        await Transaction.create(
-                            [
-                                {
-
-                                    project:
-                                        projectId,
-
-                                    user:
-                                        withdrawal.user,
-
-                                    withdrawal:
-                                        withdrawal._id,
-
-                                    type:
-                                        "withdrawal_request",
-
-                                    amount:
-                                        amount,
-
-                                    description:
-                                        "Withdrawal rejected",
-
-                                    status:
-                                        "rejected"
-
-                                }
-                            ],
-                            {
-                                session
-                            }
-                        );
-
-                    }
-
-
-                    /*
-                     * ------------------------------------------------
-                     * Create the refund transaction.
-                     *
-                     * This is inside the SAME MongoDB transaction as
-                     * the wallet and withdrawal updates.
-                     *
-                     * Therefore:
-                     *
-                     * wallet refund succeeds
-                     * + withdrawal rejection succeeds
-                     * + refund transaction succeeds
-                     *
-                     * OR
-                     *
-                     * none of them are committed.
-                     * ------------------------------------------------
-                     */
-
-                    await Transaction.create(
-                        [
-                            {
-
-                                project:
-                                    projectId,
-
-                                user:
-                                    withdrawal.user,
-
-                                withdrawal:
-                                    withdrawal._id,
-
-                                type:
-                                    "refund",
-
-                                amount:
-                                    amount,
-
-                                description:
-                                    "Rejected withdrawal refund",
-
-                                status:
-                                    "completed"
-
-                            }
-                        ],
-                        {
-                            session
-                        }
-                    );
-
-
-                    /*
-                     * Keep the transactionally rejected withdrawal
-                     * for the final return value.
-                     */
-
-                    rejectedWithdrawal =
-                        withdrawal;
-
                 }
-            );
 
-
-            /*
-             * ----------------------------------------------------
-             * Audit AFTER the financial transaction succeeds.
-             *
-             * The audit failure must not roll back an already
-             * completed financial operation.
-             * ----------------------------------------------------
-             */
-
-            await audit.log({
-
-                project:
-                    projectId,
-
-                actor:
-                    actorId,
-
-                user:
-                    rejectedWithdrawal.user,
-
-                action:
-                    "withdrawal.rejected",
-
-                resource:
-                    "withdrawal",
-
-                metadata: {
-
-                    withdrawalId:
-                        rejectedWithdrawal._id,
-
-                    amount:
-                        rejectedWithdrawal.amount,
-
-                    reason:
-                        rejectedWithdrawal.rejectionReason
-
-                },
-
-                req:
-                    ctx?.req
+                rejectedWithdrawal =
+                    withdrawal.toObject();
 
             });
 
-
             /*
-             * ----------------------------------------------------
-             * Return standardized Action Engine result.
-             * ----------------------------------------------------
+             * Audit is intentionally non-fatal.
              */
+            try {
+
+                if (
+                    audit &&
+                    typeof audit === "function"
+                ) {
+
+                    await audit({
+                        project: projectId,
+                        actor: actorId,
+                        action: "withdrawal.reject",
+                        resource: "withdrawal",
+                        resourceId: withdrawalId,
+                        metadata: {
+                            amount:
+                                rejectedWithdrawal.amount,
+                            status: "rejected"
+                        }
+                    });
+
+                }
+
+            } catch (auditError) {
+
+                console.error(
+                    "WITHDRAWAL REJECTION AUDIT ERROR:",
+                    auditError.message
+                );
+
+            }
 
             return {
-
                 success: true,
-
                 withdrawal:
                     rejectedWithdrawal
+            };
 
+        } catch (error) {
+
+            return {
+                success: false,
+                message: error.message
             };
 
         } finally {
-
-            /*
-             * Always close the MongoDB session.
-             */
 
             await session.endSession();
 
