@@ -554,16 +554,37 @@ async function find({
 async function findOne({
     projectId,
     resource,
-    id
+    id = null,
+    filter = {}
 }) {
 
-    if (!id) {
-
+    if (!projectId) {
         return {
             success: false,
-            message: "Record ID is required"
+            message: "Project ID is required"
         };
+    }
 
+    if (!resource) {
+        return {
+            success: false,
+            message: "Resource is required"
+        };
+    }
+
+    if (
+        !id &&
+        (
+            !filter ||
+            typeof filter !== "object" ||
+            Array.isArray(filter) ||
+            Object.keys(filter).length === 0
+        )
+    ) {
+        return {
+            success: false,
+            message: "Record ID or filter is required"
+        };
     }
 
     const resourceDocument =
@@ -573,55 +594,86 @@ async function findOne({
         });
 
     if (!resourceDocument) {
-
         return {
             success: false,
             message: "Resource not found"
         };
-
     }
 
     const {
         provider,
         Model
-    } =
-        resolveModel(resourceDocument);
+    } = resolveModel(resourceDocument);
 
+    // ========================================================
+    // BUILD LOOKUP
+    // ========================================================
 
-    // --------------------------------------------------------
+    let lookup = {};
+
+    if (id) {
+        lookup._id = id;
+    } else {
+        lookup = {
+            ...filter
+        };
+    }
+
+    // ========================================================
     // MONGOOSE
-    // --------------------------------------------------------
+    // ========================================================
 
     if (provider === "mongoose") {
 
         const record =
             await Model.findOne({
-
                 ...buildProjectFilter(
                     Model,
                     projectId
                 ),
-
-                _id: id
-
+                ...lookup
             });
 
         if (!record) {
-
             return {
                 success: false,
                 message: "Record not found"
             };
-
         }
 
         return {
             success: true,
             data: record
         };
-
     }
 
+    // ========================================================
+    // RESOURCEDATA
+    // ========================================================
+
+    const record =
+        await ResourceData.findOne({
+            project:
+                projectId,
+
+            resource:
+                resourceDocument._id,
+
+            ...lookup
+        });
+
+    if (!record) {
+        return {
+            success: false,
+            message: "Record not found"
+        };
+    }
+
+    return {
+        success: true,
+        data: record
+    };
+}
 
     // --------------------------------------------------------
     // RESOURCEDATA

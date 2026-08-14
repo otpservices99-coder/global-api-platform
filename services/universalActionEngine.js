@@ -631,22 +631,18 @@ async function executeResourceAction(
         case "findOne":
 
         case "get":
+          return resourceService.findOne({
+            projectId:
+              context.projectId,
 
-            return resourceService.findOne({
+            resource,
 
-                projectId:
-                    context.projectId,
+            id:
+              resolvedConfig.id || null,
 
-                resource,
-
-                id:
-                    resolveRecordId(
-                        resolvedConfig,
-                        context
-                    )
-
-            });
-
+            filter:
+               resolvedConfig.filter || {}
+         });
 
         // ====================================================
         // UPDATE
