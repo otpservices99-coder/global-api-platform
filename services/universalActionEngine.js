@@ -1,6 +1,35 @@
 const resourceService =
     require("./resourceService");
 
+const systemService = require("./systemService");
+
+
+// ============================================================
+// SPECIAL GLOBAL OPERATIONS
+// ============================================================
+
+async function executeSpecialOperation(
+    resource,
+    operation,
+    context
+) {
+
+    if (
+        resource === "system" &&
+        operation === "ping"
+    ) {
+
+        return systemService.ping({
+            projectId:
+                context.projectId ||
+                context.event?.project
+        });
+
+    }
+
+    return null;
+}
+
 
 // ============================================================
 // PATH / VARIABLE RESOLUTION
@@ -685,6 +714,20 @@ async function executeResourceAction(
 
 
     /*
+     * Execute global special operations before requiring
+     * a database Resource document.
+     */
+
+    const specialResult = await executeSpecialOperation(resource, operation, context);
+
+    if (specialResult !== null) {
+
+        return specialResult;
+
+    }
+
+
+    /*
      * Load resource definition.
      */
 
@@ -963,6 +1006,396 @@ async function executeResourceAction(
 
 
         // ====================================================
+        // FANOUT
+        //
+        // Generic configuration-driven operation.
+        //
+        // Finds source records and creates one target record
+        // for each source record.
+        //
+        // This allows actions such as notification.broadcast
+        // without requiring a dedicated handler.
+        // ====================================================
+
+        case "fanout": {
+
+            const sourceResource =
+                resolvedConfig.sourceResource;
+
+            const sourceFilter =
+                resolvedConfig.sourceFilter || {};
+
+            const targetResource =
+                resolvedConfig.targetResource;
+
+            const targetData =
+                resolvedConfig.targetData || {};
+
+            if (!sourceResource) {
+                throw new Error(
+                    "Fanout sourceResource is required"
+                );
+            }
+
+            if (!targetResource) {
+                throw new Error(
+                    "Fanout targetResource is required"
+                );
+            }
+
+            const sourceResult =
+                await resourceService.find({
+
+                    projectId:
+                        context.projectId,
+
+                    resource:
+                        sourceResource,
+
+                    filter:
+                        resolveObject(
+                            sourceFilter,
+                            context
+                        ),
+
+                    options:
+                        resolvedConfig.options || {}
+
+                });
+
+            const records =
+                sourceResult?.data ||
+                sourceResult?.results ||
+                sourceResult ||
+                [];
+
+            if (!Array.isArray(records)) {
+                throw new Error(
+                    "Fanout source must return an array"
+                );
+            }
+
+            const created = [];
+
+            for (const item of records) {
+
+                const itemContext = {
+                    ...context,
+                    item
+                };
+
+                const data =
+                    resolveObject(
+                        targetData,
+                        itemContext
+                    );
+
+                created.push(
+                    await resourceService.create({
+
+                        projectId:
+                            context.projectId,
+
+                        resource:
+                            targetResource,
+
+                        data,
+
+                        metadata:
+                            resolvedConfig.metadata || {}
+
+                    })
+                );
+
+            }
+
+            return {
+                success: true,
+                count: created.length,
+                data: created
+            };
+        }
+
+
+        // ====================================================
+        // CREATE MANY
+        // ====================================================
+
+        case "createMany": {
+
+            const items =
+                resolvedConfig.items;
+
+            if (!Array.isArray(items)) {
+                throw new Error(
+                    "createMany requires an items array"
+                );
+            }
+
+            const created = [];
+
+            for (const item of items) {
+
+                created.push(
+                    await resourceService.create({
+
+                        projectId:
+                            context.projectId,
+
+                        resource,
+
+                        data:
+                            resolveObject(
+                                item,
+                                context
+                            ),
+
+                        metadata:
+                            resolvedConfig.metadata || {}
+
+                    })
+                );
+
+            }
+
+            return {
+                success: true,
+                count: created.length,
+                data: created
+            };
+        }
+
+
+        // ====================================================
+        // UPDATE MANY
+        // ====================================================
+
+        case "updateMany": {
+
+            const filter =
+                resolvedConfig.filter || {};
+
+            const data =
+                resolvedConfig.data || {};
+
+            const records =
+                await resourceService.find({
+
+                    projectId:
+                        context.projectId,
+
+                    resource,
+
+                    filter:
+                        resolveObject(
+                            filter,
+                            context
+                        ),
+
+                    options: {}
+                });
+
+            const list =
+                records?.data ||
+                records?.results ||
+                records ||
+                [];
+
+            const updated = [];
+
+            for (const record of list) {
+
+                const id =
+                    record?._id ||
+                    record?.id;
+
+                if (!id) continue;
+
+                updated.push(
+                    await resourceService.update({
+
+                        projectId:
+                            context.projectId,
+
+                        resource,
+
+                        id,
+
+                        filter: {},
+
+                        data:
+                            resolveObject(
+                                data,
+                                {
+                                    ...context,
+                                    item: record
+                                }
+                            ),
+
+                        replace:
+                            resolvedConfig.replace === true
+                    })
+                );
+            }
+
+            return {
+                success: true,
+                count: updated.length,
+                data: updated
+            };
+        }
+
+
+        // ====================================================
+        // DELETE MANY
+        // ====================================================
+
+        case "deleteMany": {
+
+            const filter =
+                resolveObject(
+                    resolvedConfig.filter || {},
+                    context
+                );
+
+            const records =
+                await resourceService.find({
+
+                    projectId:
+                        context.projectId,
+
+                    resource,
+
+                    filter,
+
+                    options: {}
+                });
+
+            const list =
+                records?.data ||
+                records?.results ||
+                records ||
+                [];
+
+            let count = 0;
+
+            for (const record of list) {
+
+                const id =
+                    record?._id ||
+                    record?.id;
+
+                if (!id) continue;
+
+                await resourceService.remove({
+
+                    projectId:
+                        context.projectId,
+
+                    resource,
+
+                    id,
+
+                    filter: {}
+                });
+
+                count++;
+            }
+
+            return {
+                success: true,
+                count
+            };
+        }
+
+
+        // ====================================================
+        // SET
+        //
+        // Generic field assignment.
+        // ====================================================
+
+        case "set": {
+
+            const id =
+                resolveRecordId(
+                    resolvedConfig,
+                    context
+                );
+
+            if (!id && !resolvedConfig.filter) {
+                throw new Error(
+                    "Record ID or filter is required"
+                );
+            }
+
+            return resourceService.update({
+
+                projectId:
+                    context.projectId,
+
+                resource,
+
+                id,
+
+                filter:
+                    resolvedConfig.filter || {},
+
+                data:
+                    resolvedConfig.data || {},
+
+                replace: false
+            });
+        }
+
+
+        // ====================================================
+        // ADJUST
+        //
+        // Generic signed numeric adjustment.
+        // ====================================================
+
+        case "adjust": {
+
+            const amount =
+                Number(
+                    resolveValue(
+                        resolvedConfig.amount,
+                        context
+                    )
+                );
+
+            if (!Number.isFinite(amount)) {
+                throw new Error(
+                    "Invalid adjustment amount"
+                );
+            }
+
+            if (amount >= 0) {
+
+                return increment(
+                    resource,
+                    {
+                        ...resolvedConfig,
+                        amount
+                    },
+                    context
+                );
+
+            }
+
+            return decrement(
+                resource,
+                {
+                    ...resolvedConfig,
+                    amount: Math.abs(amount)
+                },
+                context
+            );
+        }
+
+
+        // ====================================================
         // UNSUPPORTED
         // ====================================================
 
@@ -982,121 +1415,82 @@ async function executeResourceAction(
 // ============================================================
 
 async function executeUniversalAction({
-
     actionRecord,
-
     projectId,
-
     actorId = null,
-
     userId = null,
-
     data = {},
-
     req = null
-
 }) {
 
     if (!actionRecord) {
-
-        throw new Error(
-            "Action definition is required"
-        );
-
+        throw new Error("Action definition is required");
     }
-
 
     if (!projectId) {
-
-        throw new Error(
-            "Project ID is required"
-        );
-
+        throw new Error("Project ID is required");
     }
 
-
-    /*
-     * Complete runtime context.
-     */
-
     const context = {
-
         projectId,
-
         actorId,
-
         userId,
-
         data,
-
         req,
-
-        action:
-            actionRecord
-
+        action: actionRecord
     };
 
+    const config = actionRecord.config || {};
 
-    /*
-     * Action configuration.
-     */
-
-    const config =
-        actionRecord.config || {};
-
-
-    /*
-     * Resolve resource and operation
-     * from the ORIGINAL action config.
-     */
-
-    const resource =
-        resolveValue(
-            config.resource,
-            context
-        );
-
-
-    const operation =
-        resolveValue(
-            config.operation,
-            context
-        );
-
-
-    /*
-     * Resolve the entire Action configuration
-     * before passing it into the resource layer.
-     */
-
-    const resolvedRuntimeConfig =
-        resolveObject(
-            config,
-            context
-        );
-
-
-    /*
-
-
-    /*
-     * Execute resource action.
-     */
-
-    return executeResourceAction(
-
-        resource,
-
-        operation,
-
-        resolvedRuntimeConfig,
-
+    const resource = resolveValue(
+        config.resource,
         context
-
     );
 
-}
+    const operation = resolveValue(
+        config.operation,
+        context
+    );
 
+    if (!resource) {
+        throw new Error("Action resource is required");
+    }
+
+    if (!operation) {
+        throw new Error("Action operation is required");
+    }
+
+    const resolvedRuntimeConfig = resolveObject(
+        config,
+        context
+    );
+
+    /*
+     * Special global operations do not require
+     * a database record or filter.
+     */
+    const specialResult =
+        await executeSpecialOperation(
+            resource,
+            operation,
+            context
+        );
+
+    if (specialResult !== null) {
+        return specialResult;
+    }
+
+    /*
+     * All normal operations continue through
+     * the universal resource engine.
+     */
+    return executeResourceAction(
+        resource,
+        operation,
+        resolvedRuntimeConfig,
+        context
+    );
+}
 
 // ============================================================
 // EXPORTS
