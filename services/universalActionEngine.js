@@ -8,35 +8,74 @@ const resourceService =
 
 function getPath(object, path) {
 
-    if (!object || !path) {
+    if (
+        object === undefined ||
+        object === null ||
+        !path
+    ) {
+
         return undefined;
+
     }
+
 
     return String(path)
         .split(".")
-        .reduce((value, key) => {
+        .reduce(
+            (value, key) => {
 
-            if (
-                value === undefined ||
-                value === null
-            ) {
-                return undefined;
-            }
+                if (
+                    value === undefined ||
+                    value === null
+                ) {
 
-            return value[key];
+                    return undefined;
 
-        }, object);
+                }
+
+                return value[key];
+
+            },
+            object
+        );
+
 }
 
 
-function resolveValue(value, context) {
+// ============================================================
+// RESOLVE VALUE
+// ============================================================
 
-    if (typeof value !== "string") {
+function resolveValue(
+    value,
+    context = {}
+) {
+
+    if (
+        typeof value !== "string"
+    ) {
+
         return value;
+
     }
 
+
+    /*
+     * Exact template:
+     *
+     * "{{data.user}}"
+     *
+     * Preserve the original type.
+     *
+     * This is important for MongoDB ObjectIds,
+     * numbers, booleans, etc.
+     */
+
     const exact =
-        value.match(/^{{\s*([^}]+)\s*}}$/);
+        value.match(
+            /^{{\s*([^}]+)\s*}}$/
+        );
+
 
     if (exact) {
 
@@ -46,6 +85,11 @@ function resolveValue(value, context) {
         );
 
     }
+
+
+    /*
+     * Embedded templates.
+     */
 
     return value.replace(
         /{{\s*([^}]+)\s*}}/g,
@@ -57,30 +101,48 @@ function resolveValue(value, context) {
                     path.trim()
                 );
 
-            return (
+
+            if (
                 result === undefined ||
                 result === null
-            )
-                ? ""
-                : String(result);
+            ) {
+
+                return "";
+
+            }
+
+
+            return String(result);
 
         }
     );
+
 }
 
 
-function resolveObject(value, context) {
+// ============================================================
+// RESOLVE OBJECT
+// ============================================================
 
-    if (Array.isArray(value)) {
+function resolveObject(
+    value,
+    context = {}
+) {
 
-        return value.map(item =>
-            resolveObject(
-                item,
-                context
-            )
+    if (
+        Array.isArray(value)
+    ) {
+
+        return value.map(
+            item =>
+                resolveObject(
+                    item,
+                    context
+                )
         );
 
     }
+
 
     if (
         value &&
@@ -88,6 +150,7 @@ function resolveObject(value, context) {
     ) {
 
         const output = {};
+
 
         for (
             const key of Object.keys(value)
@@ -101,18 +164,22 @@ function resolveObject(value, context) {
 
         }
 
+
         return output;
+
     }
+
 
     return resolveValue(
         value,
         context
     );
+
 }
 
 
 // ============================================================
-// MERGE DATA
+// MERGE OBJECTS
 // ============================================================
 
 function mergeObjects(
@@ -125,49 +192,36 @@ function mergeObjects(
         typeof base !== "object" ||
         Array.isArray(base)
     ) {
+
         return override;
+
     }
+
 
     if (
         !override ||
         typeof override !== "object" ||
         Array.isArray(override)
     ) {
+
         return base;
+
     }
 
+
     return {
+
         ...base,
+
         ...override
+
     };
+
 }
 
 
 // ============================================================
 // RESOLVE RECORD ID
-// ============================================================
-//
-// Universal ID resolution.
-//
-// Priority:
-//
-// 1. Explicit configured ID
-// 2. Runtime data.id
-// 3. Runtime data._id
-// 4. Runtime data.user
-// 5. Runtime data.userId
-// 6. Runtime context userId
-// 7. Event entityId
-//
-// This allows actions such as:
-//
-// wallet.credit
-// wallet.debit
-// user.status_update
-// user.role_update
-//
-// to receive their target dynamically without requiring
-// every Action record to contain a hard-coded "id" field.
 // ============================================================
 
 function resolveRecordId(
@@ -178,6 +232,7 @@ function resolveRecordId(
     const explicitId =
         config.id;
 
+
     if (
         explicitId !== undefined &&
         explicitId !== null &&
@@ -185,6 +240,7 @@ function resolveRecordId(
     ) {
 
         return explicitId;
+
     }
 
 
@@ -213,7 +269,9 @@ function resolveRecordId(
     ];
 
 
-    for (const candidate of candidates) {
+    for (
+        const candidate of candidates
+    ) {
 
         if (
             candidate !== undefined &&
@@ -222,12 +280,14 @@ function resolveRecordId(
         ) {
 
             return candidate;
+
         }
 
     }
 
 
     return null;
+
 }
 
 
@@ -238,15 +298,17 @@ function resolveRecordId(
 async function resolveOperation({
     resourceDocument,
     operation,
-    config,
-    context
+    config = {},
+    context = {}
 }) {
 
     const settings =
-        resourceDocument.settings || {};
+        resourceDocument?.settings || {};
+
 
     const operations =
         settings.operations || {};
+
 
     const definition =
         operations[operation];
@@ -255,7 +317,7 @@ async function resolveOperation({
     /*
      * No custom definition.
      *
-     * Fall back to generic CRUD operations.
+     * Use the requested operation directly.
      */
 
     if (
@@ -264,12 +326,24 @@ async function resolveOperation({
     ) {
 
         return {
+
             operation,
-            config
+
+            config:
+                resolveObject(
+                    config,
+                    context
+                )
+
         };
 
     }
 
+
+    /*
+     * Resolve the entire configured definition
+     * using the COMPLETE runtime context.
+     */
 
     const resolvedDefinition =
         resolveObject(
@@ -284,6 +358,7 @@ async function resolveOperation({
      * Example:
      *
      * unsuspend:
+     *
      * {
      *     operation: "update",
      *     data: {
@@ -297,9 +372,27 @@ async function resolveOperation({
         operation;
 
 
+    /*
+     * Resolve runtime Action configuration too.
+     *
+     * This is important because both the Action
+     * configuration and Resource operation may
+     * contain templates.
+     */
+
+    const resolvedConfig =
+        resolveObject(
+            config,
+            context
+        );
+
+
     const mergedConfig = {
-        ...config,
+
+        ...resolvedConfig,
+
         ...resolvedDefinition
+
     };
 
 
@@ -308,16 +401,18 @@ async function resolveOperation({
      */
 
     if (
-        config.data &&
+        resolvedConfig.data &&
         resolvedDefinition.data &&
-        typeof config.data === "object" &&
-        typeof resolvedDefinition.data === "object"
+        typeof resolvedConfig.data === "object" &&
+        typeof resolvedDefinition.data === "object" &&
+        !Array.isArray(resolvedConfig.data) &&
+        !Array.isArray(resolvedDefinition.data)
     ) {
 
         mergedConfig.data =
             mergeObjects(
                 resolvedDefinition.data,
-                config.data
+                resolvedConfig.data
             );
 
     }
@@ -332,6 +427,7 @@ async function resolveOperation({
             mergedConfig
 
     };
+
 }
 
 
@@ -344,21 +440,6 @@ async function increment(
     config,
     context
 ) {
-
-    /*
-     * Resolve the record dynamically.
-     *
-     * Explicit config.id still has priority.
-     *
-     * Otherwise runtime values such as:
-     *
-     * data.id
-     * data.user
-     * data.userId
-     * context.userId
-     *
-     * are accepted.
-     */
 
     const id =
         resolveRecordId(
@@ -395,7 +476,9 @@ async function increment(
     }
 
 
-    if (!Number.isFinite(amount)) {
+    if (
+        !Number.isFinite(amount)
+    ) {
 
         throw new Error(
             "Invalid increment amount"
@@ -412,12 +495,17 @@ async function increment(
 
             resource,
 
-            id
+            id,
+
+            filter:
+                config.filter || {}
 
         });
 
 
-    if (!existing.success) {
+    if (
+        !existing.success
+    ) {
 
         return existing;
 
@@ -437,7 +525,8 @@ async function increment(
 
         resource,
 
-        id,
+        id:
+            existing.data?._id,
 
         data: {
 
@@ -446,9 +535,123 @@ async function increment(
 
         },
 
-        replace: false
+        replace:
+            false
 
     });
+
+}
+
+
+// ============================================================
+// DYNAMIC DECREMENT
+// ============================================================
+
+async function decrement(
+    resource,
+    config,
+    context
+) {
+
+    const id =
+        resolveRecordId(
+            config,
+            context
+        );
+
+
+    const field =
+        config.field;
+
+
+    const amount =
+        Number(
+            config.amount ?? 1
+        );
+
+
+    if (!id) {
+
+        throw new Error(
+            "Record ID is required"
+        );
+
+    }
+
+
+    if (!field) {
+
+        throw new Error(
+            "Decrement field is required"
+        );
+
+    }
+
+
+    if (
+        !Number.isFinite(amount)
+    ) {
+
+        throw new Error(
+            "Invalid decrement amount"
+        );
+
+    }
+
+
+    const existing =
+        await resourceService.findOne({
+
+            projectId:
+                context.projectId,
+
+            resource,
+
+            id,
+
+            filter:
+                config.filter || {}
+
+        });
+
+
+    if (
+        !existing.success
+    ) {
+
+        return existing;
+
+    }
+
+
+    const current =
+        Number(
+            existing.data?.[field] ?? 0
+        );
+
+
+    return resourceService.update({
+
+        projectId:
+            context.projectId,
+
+        resource,
+
+        id:
+            existing.data?._id,
+
+        data: {
+
+            [field]:
+                current - amount
+
+        },
+
+        replace:
+            false
+
+    });
+
 }
 
 
@@ -482,7 +685,7 @@ async function executeResourceAction(
 
 
     /*
-     * Load resource definition from database.
+     * Load resource definition.
      */
 
     const resourceDocument =
@@ -506,7 +709,8 @@ async function executeResourceAction(
 
 
     /*
-     * Resolve custom resource operation.
+     * Resolve the operation definition
+     * against the complete runtime context.
      */
 
     const resolved =
@@ -523,6 +727,19 @@ async function executeResourceAction(
         });
 
 
+    /*
+     * Resolve one final time after merging.
+     *
+     * This guarantees nested values such as:
+     *
+     * filter.user
+     * data.user
+     * id
+     * amount
+     *
+     * are fully resolved.
+     */
+
     const resolvedConfig =
         resolveObject(
             resolved.config,
@@ -535,11 +752,12 @@ async function executeResourceAction(
 
 
     /*
-     * Check operation permissions.
+     * Check operation permissions/configuration.
      */
 
     const operations =
-        resourceDocument.settings?.operations || {};
+        resourceDocument.settings?.operations ||
+        {};
 
 
     const operationDefinition =
@@ -557,11 +775,6 @@ async function executeResourceAction(
     }
 
 
-    /*
-     * If a custom operation exists but does not
-     * resolve to a valid operation, reject it.
-     */
-
     if (
         operationDefinition &&
         typeof operationDefinition === "object" &&
@@ -575,7 +788,13 @@ async function executeResourceAction(
     }
 
 
-    switch (actualOperation) {
+    /*
+     * Execute generic operation.
+     */
+
+    switch (
+        actualOperation
+    ) {
 
 
         // ====================================================
@@ -606,7 +825,7 @@ async function executeResourceAction(
 
         case "find":
 
-        case "read":
+        case "list":
 
             return resourceService.find({
 
@@ -631,18 +850,25 @@ async function executeResourceAction(
         case "findOne":
 
         case "get":
-          return resourceService.findOne({
-            projectId:
-              context.projectId,
 
-            resource,
+            return resourceService.findOne({
 
-            id:
-              resolvedConfig.id || null,
+                projectId:
+                    context.projectId,
 
-            filter:
-               resolvedConfig.filter || {}
-         });
+                resource,
+
+                id:
+                    resolvedConfig.id || null,
+
+                filter:
+                    resolvedConfig.filter || {},
+
+                options:
+                    resolvedConfig.options || {}
+
+            });
+
 
         // ====================================================
         // UPDATE
@@ -663,11 +889,14 @@ async function executeResourceAction(
                         context
                     ),
 
+                filter:
+                    resolvedConfig.filter || {},
+
                 data:
                     resolvedConfig.data || {},
 
                 replace:
-                    resolvedConfig.replace !== false
+                    resolvedConfig.replace === true
 
             });
 
@@ -691,7 +920,10 @@ async function executeResourceAction(
                     resolveRecordId(
                         resolvedConfig,
                         context
-                    )
+                    ),
+
+                filter:
+                    resolvedConfig.filter || {}
 
             });
 
@@ -719,26 +951,20 @@ async function executeResourceAction(
 
         case "decrement":
 
-            return increment(
+            return decrement(
 
                 resource,
 
-                {
-                    ...resolvedConfig,
-
-                    amount:
-                        -Math.abs(
-                            Number(
-                                resolvedConfig.amount ?? 1
-                            )
-                        )
-
-                },
+                resolvedConfig,
 
                 context
 
             );
 
+
+        // ====================================================
+        // UNSUPPORTED
+        // ====================================================
 
         default:
 
@@ -747,6 +973,7 @@ async function executeResourceAction(
             );
 
     }
+
 }
 
 
@@ -788,9 +1015,9 @@ async function executeUniversalAction({
     }
 
 
-    const config =
-        actionRecord.config || {};
-
+    /*
+     * Complete runtime context.
+     */
 
     const context = {
 
@@ -811,8 +1038,16 @@ async function executeUniversalAction({
 
 
     /*
-     * Resource and operation come from
      * Action configuration.
+     */
+
+    const config =
+        actionRecord.config || {};
+
+
+    /*
+     * Resolve resource and operation
+     * from the ORIGINAL action config.
      */
 
     const resource =
@@ -830,59 +1065,23 @@ async function executeUniversalAction({
 
 
     /*
-     * Build runtime configuration.
-     */
-
-    const runtimeConfig = {
-        ...config
-    };
-
-
-    /*
-     * Resolve configured values first.
-     *
-     * Example:
-     *
-     * id: "{{data.user}}"
-     *
-     * becomes the actual runtime user ID.
+     * Resolve the entire Action configuration
+     * before passing it into the resource layer.
      */
 
     const resolvedRuntimeConfig =
         resolveObject(
-            runtimeConfig,
+            config,
             context
         );
 
 
     /*
-     * If the Action did not explicitly define an ID,
-     * the generic engine will resolve it automatically
-     * from the runtime context.
+
+
+    /*
+     * Execute resource action.
      */
-
-    if (
-        resolvedRuntimeConfig.id === undefined ||
-        resolvedRuntimeConfig.id === null ||
-        resolvedRuntimeConfig.id === ""
-    ) {
-
-        const dynamicId =
-            resolveRecordId(
-                resolvedRuntimeConfig,
-                context
-            );
-
-
-        if (dynamicId) {
-
-            resolvedRuntimeConfig.id =
-                dynamicId;
-
-        }
-
-    }
-
 
     return executeResourceAction(
 
@@ -895,6 +1094,7 @@ async function executeUniversalAction({
         context
 
     );
+
 }
 
 

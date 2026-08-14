@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const path = require("path");
 
 const Resource = require("../models/Resource");
 const ResourceData = require("../models/ResourceData");
@@ -10,21 +11,34 @@ const validate = require("./schemaValidator");
 // GLOBAL RESOURCE SERVICE
 // ============================================================
 //
-// Supports two resource providers:
+// Generic resource abstraction.
 //
-// 1. mongoose
-//    Resource.settings.model -> actual Mongoose model
+// Providers:
+//   mongoose
+//   mongo
+//   mongodb
+//   resourceData
 //
-// 2. resourceData
-//    Existing generic ResourceData storage
+// Mongoose resources are resolved dynamically from:
 //
-// The provider/model is determined by the Resource document.
-// No Earnify-specific resource names are hard-coded here.
+//   Resource.settings.model
+//
+// Example:
+//
+// {
+//     provider: "mongoose",
+//     model: "Wallet"
+// }
+//
+// The service automatically loads the corresponding model when
+// it has not already been registered with Mongoose.
+//
+// No project-specific resource names are hard-coded here.
 // ============================================================
 
 
 // ============================================================
-// FIND RESOURCE DEFINITION
+// RESOURCE DEFINITION
 // ============================================================
 
 async function getResource({
@@ -52,7 +66,7 @@ async function getResource({
 
 
 // ============================================================
-// RESOLVE RESOURCE PROVIDER
+// PROVIDER
 // ============================================================
 
 function getProvider(resourceDocument) {
@@ -65,7 +79,25 @@ function getProvider(resourceDocument) {
 
 
 // ============================================================
-// RESOLVE MONGOOSE MODEL
+// DYNAMIC MONGOOSE MODEL LOADER
+// ============================================================
+//
+// IMPORTANT:
+//
+// mongoose.model("Wallet") only works if Wallet.js has already
+// been required somewhere.
+//
+// The universal resource engine cannot depend on server.js
+// happening to load every possible model first.
+//
+// Therefore:
+//
+// 1. Check existing Mongoose registry.
+// 2. If missing, dynamically load ../models/<modelName>.js.
+// 3. Check registry again.
+// 4. Return the model.
+//
+// This remains completely generic.
 // ============================================================
 
 function getMongooseModel(resourceDocument) {
@@ -81,22 +113,65 @@ function getMongooseModel(resourceDocument) {
 
     }
 
-    let Model;
+
+    // --------------------------------------------------------
+    // 1. Already registered
+    // --------------------------------------------------------
+
+    if (
+        mongoose.models &&
+        mongoose.models[modelName]
+    ) {
+
+        return mongoose.models[modelName];
+
+    }
+
+
+    // --------------------------------------------------------
+    // 2. Dynamically load model
+    // --------------------------------------------------------
+
+    const modelPath =
+        path.join(
+            __dirname,
+            "..",
+            "models",
+            `${modelName}.js`
+        );
+
 
     try {
 
-        Model =
-            mongoose.model(modelName);
+        require(modelPath);
 
     } catch (error) {
 
         throw new Error(
-            `Mongoose model '${modelName}' is not registered`
+            `Unable to load Mongoose model '${modelName}': ${error.message}`
         );
 
     }
 
-    return Model;
+
+    // --------------------------------------------------------
+    // 3. Verify registration
+    // --------------------------------------------------------
+
+    if (
+        mongoose.models &&
+        mongoose.models[modelName]
+    ) {
+
+        return mongoose.models[modelName];
+
+    }
+
+
+    throw new Error(
+        `Mongoose model '${modelName}' is not registered`
+    );
+
 }
 
 
@@ -109,6 +184,7 @@ function resolveModel(resourceDocument) {
     const provider =
         getProvider(resourceDocument);
 
+
     if (
         provider === "mongoose" ||
         provider === "mongo" ||
@@ -116,23 +192,33 @@ function resolveModel(resourceDocument) {
     ) {
 
         return {
+
             provider: "mongoose",
+
             Model:
-                getMongooseModel(resourceDocument)
+                getMongooseModel(
+                    resourceDocument
+                )
+
         };
 
     }
 
+
     return {
+
         provider: "resourceData",
+
         Model:
             ResourceData
+
     };
+
 }
 
 
 // ============================================================
-// GET RESOURCE SCHEMA
+// SCHEMA
 // ============================================================
 
 async function getSchema({
@@ -141,49 +227,35 @@ async function getSchema({
 }) {
 
     if (!projectId) {
-        throw new Error("Project ID is required");
+
+        throw new Error(
+            "Project ID is required"
+        );
+
     }
 
     if (!resourceId) {
-        throw new Error("Resource ID is required");
+
+        return null;
+
     }
-
-    return await Schema.findOne({
-        project: projectId,
-        resource: resourceId
-    });
-}
-
-
-// ============================================================
-// VALIDATE DATA
-// ============================================================
-
-async function validateData({
-    projectId,
-    resourceId,
-    data = {}
-}) {
 
     const schema =
-        await getSchema({
-            projectId,
-            resourceId
+        await Schema.findOne({
+
+            project:
+                projectId,
+
+            resource:
+                resourceId,
+
+            enabled:
+                true
+
         });
 
-    if (!schema) {
+    return schema || null;
 
-        return {
-            valid: true,
-            errors: []
-        };
-
-    }
-
-    return validate(
-        schema,
-        data
-    );
 }
 
 
@@ -191,11 +263,10 @@ async function validateData({
 // PROJECT FILTER
 // ============================================================
 //
-// Mongoose resources are project-scoped when their model
-// contains a "project" field.
+// If the underlying Mongoose model contains a project field,
+// automatically scope all operations to the current project.
 //
-// This keeps the service generic without knowing anything
-// about User, Wallet, Withdrawal, etc.
+// This prevents cross-project access while remaining generic.
 // ============================================================
 
 function buildProjectFilter(
@@ -208,17 +279,21 @@ function buildProjectFilter(
     ) {
 
         return {
-            project: projectId
+
+            project:
+                projectId
+
         };
 
     }
 
     return {};
+
 }
 
 
 // ============================================================
-// PREPARE MONGOOSE CREATE DATA
+// PREPARE CREATE DATA
 // ============================================================
 
 function prepareCreateData(
@@ -231,6 +306,7 @@ function prepareCreateData(
         ...data
     };
 
+
     if (
         Model?.schema?.path("project") &&
         output.project == null
@@ -241,7 +317,104 @@ function prepareCreateData(
 
     }
 
+
     return output;
+
+}
+
+
+// ============================================================
+// VALIDATE DATA
+// ============================================================
+
+async function validateResourceData({
+    projectId,
+    resourceDocument,
+    data
+}) {
+
+    const schema =
+        await getSchema({
+
+            projectId,
+
+            resourceId:
+                resourceDocument?._id
+
+        });
+
+
+    if (!schema) {
+
+        return {
+
+            success: true,
+
+            data
+
+        };
+
+    }
+
+
+    try {
+
+        const result =
+            await validate(
+                schema,
+                data
+            );
+
+
+        if (
+            result === false
+        ) {
+
+            return {
+
+                success: false,
+
+                message:
+                    "Resource validation failed"
+
+            };
+
+        }
+
+
+        if (
+            result &&
+            typeof result === "object" &&
+            result.success === false
+        ) {
+
+            return result;
+
+        }
+
+
+        return {
+
+            success: true,
+
+            data
+
+        };
+
+    } catch (error) {
+
+        return {
+
+            success: false,
+
+            message:
+                error.message ||
+                "Resource validation failed"
+
+        };
+
+    }
+
 }
 
 
@@ -256,76 +429,127 @@ async function create({
     metadata = {}
 }) {
 
+    if (!projectId) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Project ID is required"
+
+        };
+
+    }
+
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
+
     const resourceDocument =
         await getResource({
+
             projectId,
+
             resource
+
         });
+
 
     if (!resourceDocument) {
 
         return {
+
             success: false,
-            message: "Resource not found"
+
+            message:
+                "Resource not found"
+
         };
 
     }
+
 
     const {
         provider,
         Model
     } =
-        resolveModel(resourceDocument);
+        resolveModel(
+            resourceDocument
+        );
 
 
-    // --------------------------------------------------------
-    // MONGOOSE
-    // --------------------------------------------------------
+    const preparedData =
+        provider === "mongoose"
 
-    if (provider === "mongoose") {
-
-        const createData =
-            prepareCreateData(
+            ? prepareCreateData(
                 Model,
                 projectId,
                 data
-            );
+            )
+
+            : {
+                ...data,
+
+                project:
+                    projectId
+            };
+
+
+    const validation =
+        await validateResourceData({
+
+            projectId,
+
+            resourceDocument,
+
+            data:
+                preparedData
+
+        });
+
+
+    if (
+        !validation.success
+    ) {
+
+        return validation;
+
+    }
+
+
+    if (
+        provider === "mongoose"
+    ) {
 
         const record =
             await Model.create(
-                createData
+                preparedData
             );
 
+
         return {
+
             success: true,
-            data: record
+
+            data:
+                record
+
         };
 
     }
 
-
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
-
-    const validation =
-        await validateData({
-            projectId,
-            resourceId:
-                resourceDocument._id,
-            data
-        });
-
-    if (!validation.valid) {
-
-        return {
-            success: false,
-            message: "Validation failed",
-            errors:
-                validation.errors
-        };
-
-    }
 
     const record =
         await ResourceData.create({
@@ -336,21 +560,29 @@ async function create({
             resource:
                 resourceDocument._id,
 
-            data,
+            data:
+                preparedData,
 
-            metadata
+            metadata:
+                metadata || {}
 
         });
 
+
     return {
+
         success: true,
-        data: record
+
+        data:
+            record
+
     };
+
 }
 
 
 // ============================================================
-// FIND RECORDS
+// FIND
 // ============================================================
 
 async function find({
@@ -360,33 +592,82 @@ async function find({
     options = {}
 }) {
 
+    if (!projectId) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Project ID is required"
+
+        };
+
+    }
+
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
+
     const resourceDocument =
         await getResource({
+
             projectId,
+
             resource
+
         });
+
 
     if (!resourceDocument) {
 
         return {
+
             success: false,
-            message: "Resource not found"
+
+            message:
+                "Resource not found"
+
         };
 
     }
+
 
     const {
         provider,
         Model
     } =
-        resolveModel(resourceDocument);
+        resolveModel(
+            resourceDocument
+        );
 
 
-    // --------------------------------------------------------
-    // MONGOOSE
-    // --------------------------------------------------------
+    const safeFilter =
+        (
+            filter &&
+            typeof filter === "object" &&
+            !Array.isArray(filter)
+        )
+            ? {
+                ...filter
+            }
+            : {};
 
-    if (provider === "mongoose") {
+
+    if (
+        provider === "mongoose"
+    ) {
 
         const queryFilter = {
 
@@ -395,9 +676,10 @@ async function find({
                 projectId
             ),
 
-            ...filter
+            ...safeFilter
 
         };
+
 
         let query =
             Model.find(
@@ -405,17 +687,9 @@ async function find({
             );
 
 
-        if (options.sort) {
-
-            query =
-                query.sort(
-                    options.sort
-                );
-
-        }
-
-
-        if (options.select) {
+        if (
+            options.select
+        ) {
 
             query =
                 query.select(
@@ -425,30 +699,37 @@ async function find({
         }
 
 
-        if (options.limit) {
+        if (
+            options.sort
+        ) {
 
             query =
-                query.limit(
-                    Number(options.limit)
+                query.sort(
+                    options.sort
                 );
 
         }
 
 
-        if (options.page) {
-
-            const page =
-                Math.max(
-                    Number(options.page),
-                    1
-                );
-
-            const limit =
-                Number(options.limit) || 20;
+        if (
+            options.skip !== undefined
+        ) {
 
             query =
                 query.skip(
-                    (page - 1) * limit
+                    Number(options.skip) || 0
+                );
+
+        }
+
+
+        if (
+            options.limit !== undefined
+        ) {
+
+            query =
+                query.limit(
+                    Number(options.limit) || 0
                 );
 
         }
@@ -457,98 +738,71 @@ async function find({
         const records =
             await query;
 
+
         return {
+
             success: true,
-            data: records
+
+            data:
+                records
+
         };
 
     }
 
 
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
+    const records =
+        await ResourceData.find({
 
-    const query = {
+            project:
+                projectId,
 
-        project:
-            projectId,
+            resource:
+                resourceDocument._id,
 
-        resource:
-            resourceDocument._id,
+            ...safeFilter
 
-        ...filter
+        });
 
-    };
-
-
-    let records =
-        ResourceData.find(
-            query
-        );
-
-
-    if (options.sort) {
-
-        records =
-            records.sort(
-                options.sort
-            );
-
-    }
-
-
-    if (options.select) {
-
-        records =
-            records.select(
-                options.select
-            );
-
-    }
-
-
-    if (options.limit) {
-
-        records =
-            records.limit(
-                Number(options.limit)
-            );
-
-    }
-
-
-    if (options.page) {
-
-        const page =
-            Math.max(
-                Number(options.page),
-                1
-            );
-
-        const limit =
-            Number(options.limit) || 20;
-
-        records =
-            records.skip(
-                (page - 1) * limit
-            );
-
-    }
-
-
-    records =
-        await records;
 
     return {
+
         success: true,
-        data: records
+
+        data:
+            records
+
     };
+
 }
 
 
 // ============================================================
 // FIND ONE
+// ============================================================
+//
+// Supports BOTH:
+//
+//   id
+//
+// and:
+//
+//   filter
+//
+// Example:
+//
+// findOne({
+//     projectId,
+//     resource: "wallet",
+//     filter: {
+//         user: userId
+//     }
+// })
+//
+// This is what wallet.view uses.
+//
+// IMPORTANT:
+// The filter is NOT discarded when id is absent.
 // ============================================================
 
 async function findOne({
@@ -559,100 +813,185 @@ async function findOne({
 }) {
 
     if (!projectId) {
+
         return {
+
             success: false,
-            message: "Project ID is required"
+
+            message:
+                "Project ID is required"
+
         };
+
     }
+
 
     if (!resource) {
+
         return {
+
             success: false,
-            message: "Resource is required"
+
+            message:
+                "Resource is required"
+
         };
+
     }
 
+
+    const hasId =
+        id !== undefined &&
+        id !== null &&
+        id !== "";
+
+
+    const hasFilter =
+        filter &&
+        typeof filter === "object" &&
+        !Array.isArray(filter) &&
+        Object.keys(filter).length > 0;
+
+
     if (
-        !id &&
-        (
-            !filter ||
-            typeof filter !== "object" ||
-            Array.isArray(filter) ||
-            Object.keys(filter).length === 0
-        )
+        !hasId &&
+        !hasFilter
     ) {
+
         return {
+
             success: false,
-            message: "Record ID or filter is required"
+
+            message:
+                "Record ID or filter is required"
+
         };
+
     }
+
 
     const resourceDocument =
         await getResource({
+
             projectId,
+
             resource
+
         });
 
+
     if (!resourceDocument) {
+
         return {
+
             success: false,
-            message: "Resource not found"
+
+            message:
+                "Resource not found"
+
         };
+
     }
+
 
     const {
         provider,
         Model
-    } = resolveModel(resourceDocument);
+    } =
+        resolveModel(
+            resourceDocument
+        );
 
-    // ========================================================
-    // BUILD LOOKUP
-    // ========================================================
 
-    let lookup = {};
+    /*
+     * ID has priority.
+     *
+     * Otherwise use the supplied filter.
+     */
 
-    if (id) {
-        lookup._id = id;
-    } else {
-        lookup = {
-            ...filter
+    const lookup =
+        hasId
+
+            ? {
+                _id:
+                    id
+            }
+
+            : {
+                ...filter
+            };
+
+
+    if (
+        provider === "mongoose"
+    ) {
+
+        const projectFilter =
+            buildProjectFilter(
+                Model,
+                projectId
+            );
+
+
+        /*
+         * Project scope and lookup are deliberately combined.
+         *
+         * Example generated query:
+         *
+         * {
+         *     project: projectId,
+         *     user: userId
+         * }
+         */
+
+        const query = {
+
+            ...projectFilter,
+
+            ...lookup
+
         };
-    }
 
-    // ========================================================
-    // MONGOOSE
-    // ========================================================
 
-    if (provider === "mongoose") {
+        let mongooseQuery =
+            Model.findOne(
+                query
+            );
+
 
         const record =
-            await Model.findOne({
-                ...buildProjectFilter(
-                    Model,
-                    projectId
-                ),
-                ...lookup
-            });
+            await mongooseQuery;
+
 
         if (!record) {
+
             return {
+
                 success: false,
-                message: "Record not found"
+
+                message:
+                    "Record not found"
+
             };
+
         }
 
+
         return {
+
             success: true,
-            data: record
+
+            data:
+                record
+
         };
+
     }
 
-    // ========================================================
-    // RESOURCEDATA
-    // ========================================================
 
     const record =
         await ResourceData.findOne({
+
             project:
                 projectId,
 
@@ -660,52 +999,33 @@ async function findOne({
                 resourceDocument._id,
 
             ...lookup
-        });
-
-    if (!record) {
-        return {
-            success: false,
-            message: "Record not found"
-        };
-    }
-
-    return {
-        success: true,
-        data: record
-    };
-}
-
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
-
-    const record =
-        await ResourceData.findOne({
-
-            project:
-                projectId,
-
-            resource:
-                resourceDocument._id,
-
-            _id:
-                id
 
         });
+
 
     if (!record) {
 
         return {
+
             success: false,
-            message: "Record not found"
+
+            message:
+                "Record not found"
+
         };
 
     }
 
+
     return {
+
         success: true,
-        data: record
+
+        data:
+            record
+
     };
+
 }
 
 
@@ -718,86 +1038,175 @@ async function update({
     resource,
     id,
     data = {},
-    replace = true
+    filter = {},
+    replace = false
 }) {
 
-    if (!id) {
+    if (!projectId) {
 
         return {
+
             success: false,
-            message: "Record ID is required"
+
+            message:
+                "Project ID is required"
+
         };
 
     }
 
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
+
     const resourceDocument =
         await getResource({
+
             projectId,
+
             resource
+
         });
+
 
     if (!resourceDocument) {
 
         return {
+
             success: false,
-            message: "Resource not found"
+
+            message:
+                "Resource not found"
+
         };
 
     }
+
 
     const {
         provider,
         Model
     } =
-        resolveModel(resourceDocument);
+        resolveModel(
+            resourceDocument
+        );
 
 
-    // --------------------------------------------------------
-    // MONGOOSE
-    // --------------------------------------------------------
+    const hasId =
+        id !== undefined &&
+        id !== null &&
+        id !== "";
 
-    if (provider === "mongoose") {
 
-        const filter = {
+    const hasFilter =
+        filter &&
+        typeof filter === "object" &&
+        !Array.isArray(filter) &&
+        Object.keys(filter).length > 0;
+
+
+    if (
+        !hasId &&
+        !hasFilter
+    ) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Record ID or filter is required"
+
+        };
+
+    }
+
+
+    const lookup =
+        hasId
+
+            ? {
+                _id:
+                    id
+            }
+
+            : {
+                ...filter
+            };
+
+
+    const validation =
+        await validateResourceData({
+
+            projectId,
+
+            resourceDocument,
+
+            data
+
+        });
+
+
+    if (
+        !validation.success
+    ) {
+
+        return validation;
+
+    }
+
+
+    if (
+        provider === "mongoose"
+    ) {
+
+        const query = {
 
             ...buildProjectFilter(
                 Model,
                 projectId
             ),
 
-            _id: id
+            ...lookup
 
         };
 
 
-        let updateOperation;
+        const updateData =
+            replace
 
+                ? data
 
-        if (replace) {
-
-            updateOperation = {
-                $set: data
-            };
-
-        } else {
-
-            updateOperation = {
-                $set: data
-            };
-
-        }
+                : {
+                    $set:
+                        data
+                };
 
 
         const record =
             await Model.findOneAndUpdate(
 
-                filter,
+                query,
 
-                updateOperation,
+                updateData,
 
                 {
                     new: true,
-                    runValidators: true
+
+                    runValidators:
+                        true
+
                 }
 
             );
@@ -806,72 +1215,27 @@ async function update({
         if (!record) {
 
             return {
+
                 success: false,
-                message: "Record not found"
+
+                message:
+                    "Record not found"
+
             };
 
         }
 
 
         return {
+
             success: true,
-            data: record
-        };
-    }
 
+            data:
+                record
 
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
-
-    const validation =
-        await validateData({
-
-            projectId,
-
-            resourceId:
-                resourceDocument._id,
-
-            data
-
-        });
-
-
-    if (!validation.valid) {
-
-        return {
-            success: false,
-            message: "Validation failed",
-            errors:
-                validation.errors
         };
 
     }
-
-
-    const updateOperation =
-        replace
-
-            ? {
-                data
-            }
-
-            : {
-                $set:
-                    Object.keys(data)
-                        .reduce(
-                            (output, key) => {
-
-                                output[
-                                    `data.${key}`
-                                ] = data[key];
-
-                                return output;
-
-                            },
-                            {}
-                        )
-            };
 
 
     const record =
@@ -885,19 +1249,22 @@ async function update({
                 resource:
                     resourceDocument._id,
 
-                _id:
-                    id
+                ...lookup
 
             },
 
-            updateOperation,
+            replace
+                ? {
+                    data
+                }
+                : {
+                    $set: {
+                        data
+                    }
+                },
 
             {
-
-                new: true,
-
-                runValidators: true
-
+                new: true
             }
 
         );
@@ -906,17 +1273,224 @@ async function update({
     if (!record) {
 
         return {
+
             success: false,
-            message: "Record not found"
+
+            message:
+                "Record not found"
+
         };
 
     }
 
 
     return {
+
         success: true,
-        data: record
+
+        data:
+            record
+
     };
+
+}
+
+
+// ============================================================
+// DELETE
+// ============================================================
+
+async function remove({
+    projectId,
+    resource,
+    id,
+    filter = {}
+}) {
+
+    if (!projectId) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Project ID is required"
+
+        };
+
+    }
+
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
+
+    const resourceDocument =
+        await getResource({
+
+            projectId,
+
+            resource
+
+        });
+
+
+    if (!resourceDocument) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource not found"
+
+        };
+
+    }
+
+
+    const {
+        provider,
+        Model
+    } =
+        resolveModel(
+            resourceDocument
+        );
+
+
+    const hasId =
+        id !== undefined &&
+        id !== null &&
+        id !== "";
+
+
+    const hasFilter =
+        filter &&
+        typeof filter === "object" &&
+        !Array.isArray(filter) &&
+        Object.keys(filter).length > 0;
+
+
+    if (
+        !hasId &&
+        !hasFilter
+    ) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Record ID or filter is required"
+
+        };
+
+    }
+
+
+    const lookup =
+        hasId
+
+            ? {
+                _id:
+                    id
+            }
+
+            : {
+                ...filter
+            };
+
+
+    if (
+        provider === "mongoose"
+    ) {
+
+        const record =
+            await Model.findOneAndDelete({
+
+                ...buildProjectFilter(
+                    Model,
+                    projectId
+                ),
+
+                ...lookup
+
+            });
+
+
+        if (!record) {
+
+            return {
+
+                success: false,
+
+                message:
+                    "Record not found"
+
+            };
+
+        }
+
+
+        return {
+
+            success: true,
+
+            data:
+                record
+
+        };
+
+    }
+
+
+    const record =
+        await ResourceData.findOneAndDelete({
+
+            project:
+                projectId,
+
+            resource:
+                resourceDocument._id,
+
+            ...lookup
+
+        });
+
+
+    if (!record) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Record not found"
+
+        };
+
+    }
+
+
+    return {
+
+        success: true,
+
+        data:
+            record
+
+        };
+
 }
 
 
@@ -929,161 +1503,125 @@ async function increment({
     resource,
     id,
     field,
-    amount = 1
+    amount = 1,
+    filter = {}
 }) {
 
-    if (!id) {
+    if (!projectId) {
 
         return {
+
             success: false,
-            message: "Record ID is required"
+
+            message:
+                "Project ID is required"
+
         };
 
     }
+
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
 
     if (!field) {
 
         return {
+
             success: false,
-            message: "Increment field is required"
+
+            message:
+                "Increment field is required"
+
         };
 
     }
+
 
     const numericAmount =
         Number(amount);
 
 
-    if (!Number.isFinite(numericAmount)) {
+    if (
+        !Number.isFinite(
+            numericAmount
+        )
+    ) {
 
         return {
+
             success: false,
-            message: "Invalid increment amount"
+
+            message:
+                "Invalid increment amount"
+
         };
 
     }
 
 
-    const resourceDocument =
-        await getResource({
+    const existing =
+        await findOne({
+
             projectId,
-            resource
-        });
 
+            resource,
 
-    if (!resourceDocument) {
+            id,
 
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-
-    }
-
-
-    const {
-        provider,
-        Model
-    } =
-        resolveModel(resourceDocument);
-
-
-    // --------------------------------------------------------
-    // MONGOOSE
-    // --------------------------------------------------------
-
-    if (provider === "mongoose") {
-
-        const record =
-            await Model.findOneAndUpdate(
-
-                {
-                    ...buildProjectFilter(
-                        Model,
-                        projectId
-                    ),
-
-                    _id: id
-                },
-
-                {
-                    $inc: {
-                        [field]:
-                            numericAmount
-                    }
-                },
-
-                {
-                    new: true,
-                    runValidators: true
-                }
-
-            );
-
-
-        if (!record) {
-
-            return {
-                success: false,
-                message: "Record not found"
-            };
-
-        }
-
-
-        return {
-            success: true,
-            data: record
-        };
-    }
-
-
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
-
-    const record =
-        await ResourceData.findOne({
-
-            project:
-                projectId,
-
-            resource:
-                resourceDocument._id,
-
-            _id:
-                id
+            filter
 
         });
 
 
-    if (!record) {
+    if (
+        !existing.success
+    ) {
 
-        return {
-            success: false,
-            message: "Record not found"
-        };
+        return existing;
 
     }
 
 
     const current =
         Number(
-            record.data?.[field] ?? 0
+            existing.data?.[field] ?? 0
         );
 
 
-    record.data[field] =
-        current + numericAmount;
+    return update({
 
+        projectId,
 
-    await record.save();
+        resource,
 
+        id:
+            existing.data?._id,
 
-    return {
-        success: true,
-        data: record
-    };
+        data: {
+
+            [field]:
+                current +
+                numericAmount
+
+        },
+
+        replace:
+            false
+
+    });
+
 }
 
 
@@ -1096,173 +1634,149 @@ async function decrement({
     resource,
     id,
     field,
-    amount = 1
+    amount = 1,
+    filter = {}
 }) {
+
+    if (!projectId) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Project ID is required"
+
+        };
+
+    }
+
+
+    if (!resource) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Resource is required"
+
+        };
+
+    }
+
+
+    if (!field) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Decrement field is required"
+
+        };
+
+    }
+
 
     const numericAmount =
         Number(amount);
 
 
-    if (!Number.isFinite(numericAmount)) {
+    if (
+        !Number.isFinite(
+            numericAmount
+        )
+    ) {
 
         return {
+
             success: false,
-            message: "Invalid decrement amount"
+
+            message:
+                "Invalid decrement amount"
+
         };
 
     }
 
 
-    return increment({
+    const existing =
+        await findOne({
 
-        projectId,
-
-        resource,
-
-        id,
-
-        field,
-
-        amount:
-            -Math.abs(
-                numericAmount
-            )
-
-    });
-}
-
-
-// ============================================================
-// DELETE
-// ============================================================
-
-async function remove({
-    projectId,
-    resource,
-    id
-}) {
-
-    if (!id) {
-
-        return {
-            success: false,
-            message: "Record ID is required"
-        };
-
-    }
-
-
-    const resourceDocument =
-        await getResource({
             projectId,
-            resource
-        });
 
+            resource,
 
-    if (!resourceDocument) {
+            id,
 
-        return {
-            success: false,
-            message: "Resource not found"
-        };
-
-    }
-
-
-    const {
-        provider,
-        Model
-    } =
-        resolveModel(resourceDocument);
-
-
-    // --------------------------------------------------------
-    // MONGOOSE
-    // --------------------------------------------------------
-
-    if (provider === "mongoose") {
-
-        const result =
-            await Model.deleteOne({
-
-                ...buildProjectFilter(
-                    Model,
-                    projectId
-                ),
-
-                _id: id
-
-            });
-
-
-        if (
-            result.deletedCount === 0
-        ) {
-
-            return {
-                success: false,
-                message: "Record not found"
-            };
-
-        }
-
-
-        return {
-            success: true,
-            deleted: true
-        };
-    }
-
-
-    // --------------------------------------------------------
-    // RESOURCEDATA
-    // --------------------------------------------------------
-
-    const result =
-        await ResourceData.deleteOne({
-
-            project:
-                projectId,
-
-            resource:
-                resourceDocument._id,
-
-            _id:
-                id
+            filter
 
         });
 
 
     if (
-        result.deletedCount === 0
+        !existing.success
     ) {
 
-        return {
-            success: false,
-            message: "Record not found"
-        };
+        return existing;
 
     }
 
 
-    return {
-        success: true,
-        deleted: true
-    };
+    const current =
+        Number(
+            existing.data?.[field] ?? 0
+        );
+
+
+    return update({
+
+        projectId,
+
+        resource,
+
+        id:
+            existing.data?._id,
+
+        data: {
+
+            [field]:
+                current -
+                numericAmount
+
+        },
+
+        replace:
+            false
+
+    });
+
 }
 
 
 // ============================================================
-// EXPORT
+// EXPORTS
 // ============================================================
 
 module.exports = {
 
     getResource,
 
+    getProvider,
+
+    getMongooseModel,
+
+    resolveModel,
+
     getSchema,
 
-    validateData,
+    buildProjectFilter,
+
+    prepareCreateData,
+
+    validateResourceData,
 
     create,
 
@@ -1272,10 +1786,12 @@ module.exports = {
 
     update,
 
+    remove,
+
+    delete: remove,
+
     increment,
 
-    decrement,
-
-    remove
+    decrement
 
 };
