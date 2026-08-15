@@ -1411,6 +1411,87 @@ async function executeResourceAction(
 
 
 // ============================================================
+// RESPONSE SECURITY
+// ============================================================
+
+const SENSITIVE_FIELDS = new Set([
+    "password",
+    "passwordHash",
+    "token",
+    "accessToken",
+    "refreshToken",
+    "secret",
+    "apiKey",
+    "apiSecret"
+]);
+
+function sanitizeActionResult(value) {
+
+    if (Array.isArray(value)) {
+        return value.map(
+            sanitizeActionResult
+        );
+    }
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return value;
+    }
+
+    if (
+        value instanceof Date
+    ) {
+        return value.toISOString();
+    }
+
+    if (
+        value &&
+        typeof value.toHexString === "function"
+    ) {
+        return value.toHexString();
+    }
+
+    if (
+        value &&
+        typeof value.toObject === "function"
+    ) {
+        value = value.toObject({
+            depopulate: true
+        });
+    }
+
+    if (
+        value &&
+        typeof value === "object"
+    ) {
+
+        const output = {};
+
+        for (
+            const [key, val]
+            of Object.entries(value)
+        ) {
+
+            if (
+                SENSITIVE_FIELDS.has(key)
+            ) {
+                continue;
+            }
+
+            output[key] =
+                sanitizeActionResult(val);
+        }
+
+        return output;
+    }
+
+    return value;
+}
+
+
+// ============================================================
 // UNIVERSAL ACTION
 // ============================================================
 
@@ -1441,6 +1522,94 @@ async function executeUniversalAction({
     };
 
     const config = actionRecord.config || {};
+
+    /*
+     * COMPOSED UNIVERSAL ACTION
+     *
+     * An action may contain "steps" instead of a single
+     * resource/operation. Every step uses the same generic
+     * operation engine. No handler is required.
+     */
+
+    if (
+        Array.isArray(config.steps) &&
+        config.steps.length > 0
+    ) {
+
+        const results = [];
+
+        for (const rawStep of config.steps) {
+
+            if (
+                !rawStep ||
+                typeof rawStep !== "object"
+            ) {
+                throw new Error(
+                    "Invalid action step"
+                );
+            }
+
+            const step =
+                resolveObject(
+                    rawStep,
+                    context
+                );
+
+            const stepResource =
+                resolveValue(
+                    step.resource,
+                    context
+                );
+
+            const stepOperation =
+                resolveValue(
+                    step.operation,
+                    context
+                );
+
+            if (!stepResource) {
+                throw new Error(
+                    "Action step resource is required"
+                );
+            }
+
+            if (!stepOperation) {
+                throw new Error(
+                    "Action step operation is required"
+                );
+            }
+
+            const specialResult =
+                await executeSpecialOperation(
+                    stepResource,
+                    stepOperation,
+                    context
+                );
+
+            if (specialResult !== null) {
+
+                results.push(
+                    specialResult
+                );
+
+                continue;
+            }
+
+            results.push(
+                await executeResourceAction(
+                    stepResource,
+                    stepOperation,
+                    step,
+                    context
+                )
+            );
+        }
+
+        return sanitizeActionResult({
+            success: true,
+            results
+        });
+    }
 
     const resource = resolveValue(
         config.resource,
@@ -1484,11 +1653,16 @@ async function executeUniversalAction({
      * All normal operations continue through
      * the universal resource engine.
      */
-    return executeResourceAction(
-        resource,
-        operation,
-        resolvedRuntimeConfig,
-        context
+    const result =
+        await executeResourceAction(
+            resource,
+            operation,
+            resolvedRuntimeConfig,
+            context
+        );
+
+    return sanitizeActionResult(
+        result
     );
 }
 

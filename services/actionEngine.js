@@ -124,34 +124,21 @@ async function executeAction(
     //
     // ========================================================
 
-    if (
-        config.resource &&
-        config.operation
-    ) {
+    return executeUniversalAction({
 
-        return executeUniversalAction({
+        actionRecord: action,
 
-            actionRecord:
-                action,
+        projectId: context.projectId,
 
-            projectId:
-                context.projectId,
+        actorId: context.actorId || null,
 
-            actorId:
-                context.actorId || null,
+        userId: context.userId || null,
 
-            userId:
-                context.userId || null,
+        data: context.data || {},
 
-            data:
-                context.data || {},
+        req: context.req || null
 
-            req:
-                context.req || null
-
-        });
-
-    }
+    });
 
 
     // ========================================================
