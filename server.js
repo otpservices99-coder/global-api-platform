@@ -498,9 +498,6 @@ app.use(
 
 
 // ============================================================
-app.get("/__engine_area_check", (req, res) => {
-    res.json({ ok: true, message: "engine area reached" });
-});
 
 // GLOBAL ACTION ENGINE
 // ============================================================
@@ -587,23 +584,8 @@ app.use(
 // ============================================================
 //
 //
-app.get("/__routes_check", (req, res) => {
-    res.json({
-        routes: app._router ? app._router.stack.map(layer => ({
-            path: layer.route?.path || null,
-            methods: layer.route?.methods || null
-        })) : "router-unavailable"
-    });
 });
 
-app.get("/__deploy_check", (req, res) => {
-    res.json({
-        ok: true,
-        app: "earnify",
-        version: "10b3127",
-        engineRouteLoaded: typeof engineRoute === "function",
-        node: process.version
-    });
 });
 
 // 404
