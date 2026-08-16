@@ -498,6 +498,10 @@ app.use(
 
 
 // ============================================================
+app.get("/__engine_area_check", (req, res) => {
+    res.json({ ok: true, message: "engine area reached" });
+});
+
 // GLOBAL ACTION ENGINE
 // ============================================================
 
