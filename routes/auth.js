@@ -11,6 +11,8 @@ const {
     loginLimiter
 } = require("../middleware/rateLimiter");
 
+const project = require("../middleware/project");
+
 
 /**
  * @swagger
@@ -32,27 +34,13 @@ const {
  *         required: true
  *         schema:
  *           type: string
- *         description: Project API key
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - username
- *               - email
- *               - password
- *             properties:
- *               username:
- *                 type: string
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: User registered successfully
+ *         description: Project or global API key
+ *       - in: header
+ *         name: X-Project-ID
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Required when using a global API key to target a project
  */
 
 
@@ -68,35 +56,38 @@ const {
  *         required: true
  *         schema:
  *           type: string
- *         description: Project API key
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
+ *         description: Project or global API key
+ *       - in: header
+ *         name: X-Project-ID
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Required when using a global API key to target a project
  */
 
 
+/*
+|--------------------------------------------------------------------------
+| REGISTER
+|--------------------------------------------------------------------------
+*/
+
 router.post(
     "/register",
+    project,
     registerUser
 );
 
 
+/*
+|--------------------------------------------------------------------------
+| LOGIN
+|--------------------------------------------------------------------------
+*/
+
 router.post(
     "/login",
+    project,
     loginLimiter,
     loginUser
 );

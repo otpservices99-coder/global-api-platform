@@ -1,78 +1,75 @@
 const resourceService =
     require("./resourceService");
 
-const systemService = require("./systemService");
-
 
 // ============================================================
-// SPECIAL GLOBAL OPERATIONS
-// ============================================================
-
-async function executeSpecialOperation(
-    resource,
-    operation,
-    context
-) {
-
-    if (
-        resource === "system" &&
-        operation === "ping"
-    ) {
-
-        return systemService.ping({
-            projectId:
-                context.projectId ||
-                context.event?.project
-        });
-
-    }
-
-    return null;
-}
-
-
-// ============================================================
-// PATH / VARIABLE RESOLUTION
+// VALUE RESOLUTION
 // ============================================================
 
 function getPath(object, path) {
 
     if (
         object === undefined ||
-        object === null ||
-        !path
+        object === null
     ) {
-
         return undefined;
-
     }
 
+    if (
+        typeof path !== "string" ||
+        !path
+    ) {
+        return undefined;
+    }
 
-    return String(path)
+    return path
         .split(".")
         .reduce(
-            (value, key) => {
-
-                if (
-                    value === undefined ||
-                    value === null
-                ) {
-
-                    return undefined;
-
-                }
-
-                return value[key];
-
-            },
+            (current, key) =>
+                current === undefined ||
+                current === null
+                    ? undefined
+                    : current[key],
             object
         );
-
 }
 
 
 // ============================================================
-// RESOLVE VALUE
+// PLAIN OBJECT DETECTION
+// ============================================================
+//
+// IMPORTANT:
+//
+// Only recursively resolve real plain JavaScript objects.
+//
+// MongoDB ObjectId, Date, Mongoose documents and other
+// class instances MUST remain untouched.
+//
+// This is what keeps the universal resolver truly generic.
+// ============================================================
+
+function isPlainObject(value) {
+
+    if (
+        value === null ||
+        typeof value !== "object"
+    ) {
+        return false;
+    }
+
+    const prototype =
+        Object.getPrototypeOf(value);
+
+    return (
+        prototype === Object.prototype ||
+        prototype === null
+    );
+}
+
+
+// ============================================================
+// VALUE RESOLUTION
 // ============================================================
 
 function resolveValue(
@@ -80,12 +77,17 @@ function resolveValue(
     context = {}
 ) {
 
+    /*
+     * Non-string values are already resolved.
+     *
+     * IMPORTANT:
+     * ObjectId instances must pass through untouched.
+     */
+
     if (
         typeof value !== "string"
     ) {
-
         return value;
-
     }
 
 
@@ -94,69 +96,80 @@ function resolveValue(
      *
      * "{{data.user}}"
      *
-     * Preserve the original type.
+     * Return the original value instead of converting it
+     * to a string.
      *
-     * This is important for MongoDB ObjectIds,
-     * numbers, booleans, etc.
+     * This is critical for:
+     *
+     * ObjectId
+     * Number
+     * Boolean
+     * Date
+     * Arrays
+     * Objects
      */
 
     const exact =
         value.match(
-            /^{{\s*([^}]+)\s*}}$/
+            /^\{\{\s*([^}]+?)\s*\}\}$/
         );
 
 
     if (exact) {
 
-        return getPath(
-            context,
-            exact[1].trim()
-        );
+        const resolved =
+            getPath(
+                context,
+                exact[1].trim()
+            );
 
+
+        return resolved === undefined
+            ? value
+            : resolved;
     }
 
 
     /*
-     * Embedded templates.
+     * Embedded templates remain strings.
+     *
+     * Example:
+     *
+     * "user-{{data.user}}"
      */
 
     return value.replace(
-        /{{\s*([^}]+)\s*}}/g,
-        (_, path) => {
+        /\{\{\s*([^}]+?)\s*\}\}/g,
 
-            const result =
+        (match, path) => {
+
+            const resolved =
                 getPath(
                     context,
                     path.trim()
                 );
 
 
-            if (
-                result === undefined ||
-                result === null
-            ) {
-
-                return "";
-
-            }
-
-
-            return String(result);
-
+            return resolved === undefined
+                ? match
+                : String(resolved);
         }
     );
-
 }
 
 
 // ============================================================
-// RESOLVE OBJECT
+// RECURSIVE OBJECT RESOLUTION
 // ============================================================
 
 function resolveObject(
     value,
     context = {}
 ) {
+
+    /*
+     * Arrays are recursively resolved.
+     */
 
     if (
         Array.isArray(value)
@@ -173,84 +186,56 @@ function resolveObject(
     }
 
 
+    /*
+     * CRITICAL:
+     *
+     * Only recurse into plain objects.
+     *
+     * MongoDB ObjectId is NOT a plain object.
+     * Date is NOT a plain object.
+     * Mongoose documents are NOT plain objects.
+     *
+     * Therefore they pass through unchanged.
+     */
+
     if (
-        value &&
-        typeof value === "object"
+        isPlainObject(value)
     ) {
 
         const output = {};
 
-
         for (
-            const key of Object.keys(value)
+            const [key, item] of
+            Object.entries(value)
         ) {
 
             output[key] =
                 resolveObject(
-                    value[key],
+                    item,
                     context
                 );
-
         }
 
-
         return output;
-
     }
 
+
+    /*
+     * Everything else goes through resolveValue().
+     *
+     * This preserves ObjectId and other objects while
+     * still resolving strings containing templates.
+     */
 
     return resolveValue(
         value,
         context
     );
-
 }
 
 
 // ============================================================
-// MERGE OBJECTS
-// ============================================================
-
-function mergeObjects(
-    base = {},
-    override = {}
-) {
-
-    if (
-        !base ||
-        typeof base !== "object" ||
-        Array.isArray(base)
-    ) {
-
-        return override;
-
-    }
-
-
-    if (
-        !override ||
-        typeof override !== "object" ||
-        Array.isArray(override)
-    ) {
-
-        return base;
-
-    }
-
-
-    return {
-
-        ...base,
-
-        ...override
-
-    };
-
-}
-
-
-// ============================================================
-// RESOLVE RECORD ID
+// RECORD ID RESOLUTION
 // ============================================================
 
 function resolveRecordId(
@@ -258,42 +243,25 @@ function resolveRecordId(
     context = {}
 ) {
 
-    const explicitId =
-        config.id;
-
-
-    if (
-        explicitId !== undefined &&
-        explicitId !== null &&
-        explicitId !== ""
-    ) {
-
-        return explicitId;
-
-    }
-
-
-    const data =
-        context.data || {};
-
-
     const candidates = [
 
-        data.id,
+        config.id,
 
-        data._id,
+        config._id,
 
-        data.user,
+        config.recordId,
 
-        data.userId,
+        config.record,
 
-        context.userId,
+        context.id,
 
-        context.entityId,
+        context._id,
 
-        context.event?.entityId,
+        context.data?.id,
 
-        context.event?.userId
+        context.data?._id,
+
+        context.data?.recordId
 
     ];
 
@@ -309,14 +277,54 @@ function resolveRecordId(
         ) {
 
             return candidate;
-
         }
-
     }
 
 
     return null;
+}
 
+
+// ============================================================
+// SPECIAL OPERATIONS
+// ============================================================
+
+async function executeSpecialOperation(
+    resource,
+    operation,
+    context
+) {
+
+    /*
+     * Global system ping.
+     *
+     * This is intentionally generic and does
+     * not depend on an application-specific model.
+     */
+
+    if (
+        resource === "system" &&
+        operation === "ping"
+    ) {
+
+        return {
+
+            success: true,
+
+            data: {
+
+                pong: true,
+
+                timestamp:
+                    new Date().toISOString()
+
+            }
+
+        };
+    }
+
+
+    return null;
 }
 
 
@@ -334,19 +342,19 @@ async function resolveOperation({
     const settings =
         resourceDocument?.settings || {};
 
-
     const operations =
         settings.operations || {};
-
 
     const definition =
         operations[operation];
 
 
     /*
-     * No custom definition.
+     * If the resource does not define a custom
+     * mapping, execute the requested operation
+     * directly.
      *
-     * Use the requested operation directly.
+     * This keeps the engine global.
      */
 
     if (
@@ -365,13 +373,11 @@ async function resolveOperation({
                 )
 
         };
-
     }
 
 
     /*
-     * Resolve the entire configured definition
-     * using the COMPLETE runtime context.
+     * Resolve the complete resource definition.
      */
 
     const resolvedDefinition =
@@ -381,32 +387,13 @@ async function resolveOperation({
         );
 
 
-    /*
-     * Database operation alias.
-     *
-     * Example:
-     *
-     * unsuspend:
-     *
-     * {
-     *     operation: "update",
-     *     data: {
-     *         status: "active"
-     *     }
-     * }
-     */
-
     const actualOperation =
         resolvedDefinition.operation ||
         operation;
 
 
     /*
-     * Resolve runtime Action configuration too.
-     *
-     * This is important because both the Action
-     * configuration and Resource operation may
-     * contain templates.
+     * Resolve the Action configuration too.
      */
 
     const resolvedConfig =
@@ -415,6 +402,11 @@ async function resolveOperation({
             context
         );
 
+
+    /*
+     * Resource definition is the base.
+     * Action configuration overrides it.
+     */
 
     const mergedConfig = {
 
@@ -426,7 +418,7 @@ async function resolveOperation({
 
 
     /*
-     * Runtime action data overrides configured data.
+     * Merge nested data instead of replacing it.
      */
 
     if (
@@ -443,7 +435,28 @@ async function resolveOperation({
                 resolvedDefinition.data,
                 resolvedConfig.data
             );
+    }
 
+
+    /*
+     * Merge filters too.
+     *
+     * This allows a Resource definition to provide
+     * a default filter while an Action supplies another.
+     */
+
+    if (
+        resolvedConfig.filter &&
+        resolvedDefinition.filter &&
+        typeof resolvedConfig.filter === "object" &&
+        typeof resolvedDefinition.filter === "object"
+    ) {
+
+        mergedConfig.filter =
+            mergeObjects(
+                resolvedDefinition.filter,
+                resolvedConfig.filter
+            );
     }
 
 
@@ -456,12 +469,38 @@ async function resolveOperation({
             mergedConfig
 
     };
-
 }
 
 
 // ============================================================
 // DYNAMIC INCREMENT
+// ============================================================
+//
+// Supports:
+//   id
+//   filter
+//
+// Examples:
+//
+// {
+//   operation: "increment",
+//   field: "balance",
+//   amount: "{{data.amount}}",
+//   filter: {
+//     user: "{{data.user}}"
+//   }
+// }
+//
+// OR:
+//
+// {
+//   operation: "increment",
+//   field: "balance",
+//   amount: 100,
+//   id: "{{data.wallet}}"
+// }
+//
+// This is completely resource-agnostic.
 // ============================================================
 
 async function increment(
@@ -476,25 +515,19 @@ async function increment(
             context
         );
 
-
     const field =
         config.field;
-
 
     const amount =
         Number(
             config.amount ?? 1
         );
 
-
-    if (!id) {
-
-        throw new Error(
-            "Record ID is required"
+    const filter =
+        resolveObject(
+            config.filter || {},
+            context
         );
-
-    }
-
 
     if (!field) {
 
@@ -504,10 +537,7 @@ async function increment(
 
     }
 
-
-    if (
-        !Number.isFinite(amount)
-    ) {
+    if (!Number.isFinite(amount)) {
 
         throw new Error(
             "Invalid increment amount"
@@ -515,7 +545,30 @@ async function increment(
 
     }
 
+    const hasId =
+        id !== undefined &&
+        id !== null &&
+        id !== "";
 
+    const hasFilter =
+        filter &&
+        typeof filter === "object" &&
+        !Array.isArray(filter) &&
+        Object.keys(filter).length > 0;
+
+    if (!hasId && !hasFilter) {
+
+        throw new Error(
+            "Record ID or filter is required"
+        );
+
+    }
+
+    /*
+     * Find the target record generically.
+     *
+     * No wallet/user/product knowledge exists here.
+     */
     const existing =
         await resourceService.findOne({
 
@@ -524,28 +577,49 @@ async function increment(
 
             resource,
 
-            id,
+            id:
+                hasId
+                    ? id
+                    : null,
 
             filter:
-                config.filter || {}
+                hasId
+                    ? {}
+                    : filter
 
         });
 
-
-    if (
-        !existing.success
-    ) {
+    if (!existing?.success) {
 
         return existing;
 
     }
 
+    if (!existing.data) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Record not found"
+
+        };
+
+    }
 
     const current =
         Number(
             existing.data?.[field] ?? 0
         );
 
+    if (!Number.isFinite(current)) {
+
+        throw new Error(
+            `Field '${field}' is not numeric`
+        );
+
+    }
 
     return resourceService.update({
 
@@ -555,7 +629,7 @@ async function increment(
         resource,
 
         id:
-            existing.data?._id,
+            existing.data._id,
 
         data: {
 
@@ -575,6 +649,13 @@ async function increment(
 // ============================================================
 // DYNAMIC DECREMENT
 // ============================================================
+//
+// Supports:
+//   id
+//   filter
+//
+// Completely resource-agnostic.
+// ============================================================
 
 async function decrement(
     resource,
@@ -588,25 +669,19 @@ async function decrement(
             context
         );
 
-
     const field =
         config.field;
-
 
     const amount =
         Number(
             config.amount ?? 1
         );
 
-
-    if (!id) {
-
-        throw new Error(
-            "Record ID is required"
+    const filter =
+        resolveObject(
+            config.filter || {},
+            context
         );
-
-    }
-
 
     if (!field) {
 
@@ -616,10 +691,7 @@ async function decrement(
 
     }
 
-
-    if (
-        !Number.isFinite(amount)
-    ) {
+    if (!Number.isFinite(amount)) {
 
         throw new Error(
             "Invalid decrement amount"
@@ -627,7 +699,28 @@ async function decrement(
 
     }
 
+    const hasId =
+        id !== undefined &&
+        id !== null &&
+        id !== "";
 
+    const hasFilter =
+        filter &&
+        typeof filter === "object" &&
+        !Array.isArray(filter) &&
+        Object.keys(filter).length > 0;
+
+    if (!hasId && !hasFilter) {
+
+        throw new Error(
+            "Record ID or filter is required"
+        );
+
+    }
+
+    /*
+     * Generic resource lookup.
+     */
     const existing =
         await resourceService.findOne({
 
@@ -636,28 +729,49 @@ async function decrement(
 
             resource,
 
-            id,
+            id:
+                hasId
+                    ? id
+                    : null,
 
             filter:
-                config.filter || {}
+                hasId
+                    ? {}
+                    : filter
 
         });
 
-
-    if (
-        !existing.success
-    ) {
+    if (!existing?.success) {
 
         return existing;
 
     }
 
+    if (!existing.data) {
+
+        return {
+
+            success: false,
+
+            message:
+                "Record not found"
+
+        };
+
+    }
 
     const current =
         Number(
             existing.data?.[field] ?? 0
         );
 
+    if (!Number.isFinite(current)) {
+
+        throw new Error(
+            `Field '${field}' is not numeric`
+        );
+
+    }
 
     return resourceService.update({
 
@@ -667,7 +781,7 @@ async function decrement(
         resource,
 
         id:
-            existing.data?._id,
+            existing.data._id,
 
         data: {
 
@@ -700,7 +814,6 @@ async function executeResourceAction(
         throw new Error(
             "Action resource is required"
         );
-
     }
 
 
@@ -709,26 +822,32 @@ async function executeResourceAction(
         throw new Error(
             "Action operation is required"
         );
-
     }
 
 
     /*
-     * Execute global special operations before requiring
-     * a database Resource document.
+     * Execute global special operations before
+     * requiring a Resource document.
      */
 
-    const specialResult = await executeSpecialOperation(resource, operation, context);
+    const specialResult =
+        await executeSpecialOperation(
+            resource,
+            operation,
+            context
+        );
 
-    if (specialResult !== null) {
+
+    if (
+        specialResult !== null
+    ) {
 
         return specialResult;
-
     }
 
 
     /*
-     * Load resource definition.
+     * Load resource definition dynamically.
      */
 
     const resourceDocument =
@@ -747,13 +866,11 @@ async function executeResourceAction(
         throw new Error(
             `Resource '${resource}' not found`
         );
-
     }
 
 
     /*
-     * Resolve the operation definition
-     * against the complete runtime context.
+     * Resolve operation against the resource.
      */
 
     const resolved =
@@ -771,16 +888,7 @@ async function executeResourceAction(
 
 
     /*
-     * Resolve one final time after merging.
-     *
-     * This guarantees nested values such as:
-     *
-     * filter.user
-     * data.user
-     * id
-     * amount
-     *
-     * are fully resolved.
+     * Final template resolution.
      */
 
     const resolvedConfig =
@@ -795,12 +903,13 @@ async function executeResourceAction(
 
 
     /*
-     * Check operation permissions/configuration.
+     * Validate configured operation.
      */
 
     const operations =
-        resourceDocument.settings?.operations ||
-        {};
+        resourceDocument
+            .settings
+            ?.operations || {};
 
 
     const operationDefinition =
@@ -814,9 +923,16 @@ async function executeResourceAction(
         throw new Error(
             `Operation '${operation}' is disabled for resource '${resource}'`
         );
-
     }
 
+
+    /*
+     * If a resource explicitly defines the operation,
+     * it must contain a valid database operation.
+     *
+     * Otherwise resolveOperation() allows the requested
+     * operation to pass through dynamically.
+     */
 
     if (
         operationDefinition &&
@@ -827,7 +943,6 @@ async function executeResourceAction(
         throw new Error(
             `Operation '${operation}' is not configured correctly`
         );
-
     }
 
 
@@ -838,7 +953,6 @@ async function executeResourceAction(
     switch (
         actualOperation
     ) {
-
 
         // ====================================================
         // CREATE
@@ -978,13 +1092,9 @@ async function executeResourceAction(
         case "increment":
 
             return increment(
-
                 resource,
-
                 resolvedConfig,
-
                 context
-
             );
 
 
@@ -995,26 +1105,14 @@ async function executeResourceAction(
         case "decrement":
 
             return decrement(
-
                 resource,
-
                 resolvedConfig,
-
                 context
-
             );
 
 
         // ====================================================
         // FANOUT
-        //
-        // Generic configuration-driven operation.
-        //
-        // Finds source records and creates one target record
-        // for each source record.
-        //
-        // This allows actions such as notification.broadcast
-        // without requiring a dedicated handler.
         // ====================================================
 
         case "fanout": {
@@ -1031,17 +1129,22 @@ async function executeResourceAction(
             const targetData =
                 resolvedConfig.targetData || {};
 
+
             if (!sourceResource) {
+
                 throw new Error(
                     "Fanout sourceResource is required"
                 );
             }
 
+
             if (!targetResource) {
+
                 throw new Error(
                     "Fanout targetResource is required"
                 );
             }
+
 
             const sourceResult =
                 await resourceService.find({
@@ -1063,26 +1166,39 @@ async function executeResourceAction(
 
                 });
 
+
             const records =
                 sourceResult?.data ||
                 sourceResult?.results ||
                 sourceResult ||
                 [];
 
-            if (!Array.isArray(records)) {
+
+            if (
+                !Array.isArray(records)
+            ) {
+
                 throw new Error(
                     "Fanout source must return an array"
                 );
             }
 
+
             const created = [];
 
-            for (const item of records) {
+
+            for (
+                const item of records
+            ) {
 
                 const itemContext = {
+
                     ...context,
+
                     item
+
                 };
+
 
                 const data =
                     resolveObject(
@@ -1090,7 +1206,9 @@ async function executeResourceAction(
                         itemContext
                     );
 
+
                 created.push(
+
                     await resourceService.create({
 
                         projectId:
@@ -1105,14 +1223,21 @@ async function executeResourceAction(
                             resolvedConfig.metadata || {}
 
                     })
-                );
 
+                );
             }
 
+
             return {
+
                 success: true,
-                count: created.length,
-                data: created
+
+                count:
+                    created.length,
+
+                data:
+                    created
+
             };
         }
 
@@ -1126,17 +1251,26 @@ async function executeResourceAction(
             const items =
                 resolvedConfig.items;
 
-            if (!Array.isArray(items)) {
+
+            if (
+                !Array.isArray(items)
+            ) {
+
                 throw new Error(
                     "createMany requires an items array"
                 );
             }
 
+
             const created = [];
 
-            for (const item of items) {
+
+            for (
+                const item of items
+            ) {
 
                 created.push(
+
                     await resourceService.create({
 
                         projectId:
@@ -1154,14 +1288,21 @@ async function executeResourceAction(
                             resolvedConfig.metadata || {}
 
                     })
-                );
 
+                );
             }
 
+
             return {
+
                 success: true,
-                count: created.length,
-                data: created
+
+                count:
+                    created.length,
+
+                data:
+                    created
+
             };
         }
 
@@ -1178,6 +1319,7 @@ async function executeResourceAction(
             const data =
                 resolvedConfig.data || {};
 
+
             const records =
                 await resourceService.find({
 
@@ -1193,25 +1335,35 @@ async function executeResourceAction(
                         ),
 
                     options: {}
+
                 });
+
 
             const list =
                 records?.data ||
                 records?.results ||
-                records ||
                 [];
+
+
+            if (
+                !Array.isArray(list)
+            ) {
+
+                throw new Error(
+                    "updateMany could not resolve records"
+                );
+            }
+
 
             const updated = [];
 
-            for (const record of list) {
 
-                const id =
-                    record?._id ||
-                    record?.id;
-
-                if (!id) continue;
+            for (
+                const record of list
+            ) {
 
                 updated.push(
+
                     await resourceService.update({
 
                         projectId:
@@ -1219,9 +1371,8 @@ async function executeResourceAction(
 
                         resource,
 
-                        id,
-
-                        filter: {},
+                        id:
+                            record._id,
 
                         data:
                             resolveObject(
@@ -1234,437 +1385,424 @@ async function executeResourceAction(
 
                         replace:
                             resolvedConfig.replace === true
+
                     })
+
                 );
             }
+
 
             return {
+
                 success: true,
-                count: updated.length,
-                data: updated
-            };
-        }
 
-
-        // ====================================================
-        // DELETE MANY
-        // ====================================================
-
-        case "deleteMany": {
-
-            const filter =
-                resolveObject(
-                    resolvedConfig.filter || {},
-                    context
-                );
-
-            const records =
-                await resourceService.find({
-
-                    projectId:
-                        context.projectId,
-
-                    resource,
-
-                    filter,
-
-                    options: {}
-                });
-
-            const list =
-                records?.data ||
-                records?.results ||
-                records ||
-                [];
-
-            let count = 0;
-
-            for (const record of list) {
-
-                const id =
-                    record?._id ||
-                    record?.id;
-
-                if (!id) continue;
-
-                await resourceService.remove({
-
-                    projectId:
-                        context.projectId,
-
-                    resource,
-
-                    id,
-
-                    filter: {}
-                });
-
-                count++;
-            }
-
-            return {
-                success: true,
-                count
-            };
-        }
-
-
-        // ====================================================
-        // SET
-        //
-        // Generic field assignment.
-        // ====================================================
-
-        case "set": {
-
-            const id =
-                resolveRecordId(
-                    resolvedConfig,
-                    context
-                );
-
-            if (!id && !resolvedConfig.filter) {
-                throw new Error(
-                    "Record ID or filter is required"
-                );
-            }
-
-            return resourceService.update({
-
-                projectId:
-                    context.projectId,
-
-                resource,
-
-                id,
-
-                filter:
-                    resolvedConfig.filter || {},
+                count:
+                    updated.length,
 
                 data:
-                    resolvedConfig.data || {},
+                    updated
 
-                replace: false
-            });
+            };
         }
 
-
-        // ====================================================
-        // ADJUST
-        //
-        // Generic signed numeric adjustment.
-        // ====================================================
-
-        case "adjust": {
-
-            const amount =
-                Number(
-                    resolveValue(
-                        resolvedConfig.amount,
-                        context
-                    )
-                );
-
-            if (!Number.isFinite(amount)) {
-                throw new Error(
-                    "Invalid adjustment amount"
-                );
-            }
-
-            if (amount >= 0) {
-
-                return increment(
-                    resource,
-                    {
-                        ...resolvedConfig,
-                        amount
-                    },
-                    context
-                );
-
-            }
-
-            return decrement(
-                resource,
-                {
-                    ...resolvedConfig,
-                    amount: Math.abs(amount)
-                },
-                context
-            );
-        }
-
-
-        // ====================================================
-        // UNSUPPORTED
-        // ====================================================
 
         default:
 
             throw new Error(
-                `Unsupported operation: ${actualOperation}`
+                `Unsupported database operation '${actualOperation}'`
             );
-
     }
-
 }
 
 
 // ============================================================
-// RESPONSE SECURITY
+// EXECUTE UNIVERSAL ACTION
+// ============================================================
+//
+// GLOBAL CONFIGURATION-DRIVEN EXECUTION
+//
+// Supported:
+//
+// 1. Action document
+//    executeUniversalAction(actionDocument, data, context)
+//
+// 2. Action name + resolved action config
+//    executeUniversalAction("wallet.credit", data, {
+//        actionConfig: {...}
+//    })
+//
+// 3. Composed actions
+//    {
+//        steps: [...]
+//    }
+//
+// The engine never contains project-specific action names.
+// Resource and operation are always resolved from configuration.
 // ============================================================
 
-const SENSITIVE_FIELDS = new Set([
-    "password",
-    "passwordHash",
-    "token",
-    "accessToken",
-    "refreshToken",
-    "secret",
-    "apiKey",
-    "apiSecret"
-]);
-
-function sanitizeActionResult(value) {
-
-    if (Array.isArray(value)) {
-        return value.map(
-            sanitizeActionResult
-        );
-    }
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-        return value;
-    }
-
-    if (
-        value instanceof Date
-    ) {
-        return value.toISOString();
-    }
-
-    if (
-        value &&
-        typeof value.toHexString === "function"
-    ) {
-        return value.toHexString();
-    }
-
-    if (
-        value &&
-        typeof value.toObject === "function"
-    ) {
-        value = value.toObject({
-            depopulate: true
-        });
-    }
-
-    if (
-        value &&
-        typeof value === "object"
-    ) {
-
-        const output = {};
-
-        for (
-            const [key, val]
-            of Object.entries(value)
-        ) {
-
-            if (
-                SENSITIVE_FIELDS.has(key)
-            ) {
-                continue;
-            }
-
-            output[key] =
-                sanitizeActionResult(val);
-        }
-
-        return output;
-    }
-
-    return value;
-}
-
-
-// ============================================================
-// UNIVERSAL ACTION
-// ============================================================
-
-async function executeUniversalAction({
-    actionRecord,
-    projectId,
-    actorId = null,
-    userId = null,
+async function executeUniversalAction(
+    action,
     data = {},
-    req = null
-}) {
+    context = {}
+) {
 
-    if (!actionRecord) {
-        throw new Error("Action definition is required");
+    if (!action) {
+
+        throw new Error(
+            "Action is required"
+        );
+
     }
 
-    if (!projectId) {
-        throw new Error("Project ID is required");
-    }
-
-    const context = {
-        projectId,
-        actorId,
-        userId,
-        data,
-        req,
-        action: actionRecord
-    };
-
-    const config = actionRecord.config || {};
 
     /*
-     * COMPOSED UNIVERSAL ACTION
+     * --------------------------------------------------------
+     * ACTION NAME
+     * --------------------------------------------------------
+     */
+
+    const actionName =
+        typeof action === "string"
+            ? action
+            : action.name;
+
+
+    if (!actionName) {
+
+        throw new Error(
+            "Action name is required"
+        );
+
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * RUNTIME CONTEXT
+     * --------------------------------------------------------
      *
-     * An action may contain "steps" instead of a single
-     * resource/operation. Every step uses the same generic
-     * operation engine. No handler is required.
+     * Everything available to templates lives here.
+     *
+     * Example:
+     *
+     * {{data.user}}
+     * {{data.amount}}
+     * {{projectId}}
+     * {{action}}
+     */
+
+    const runtimeContext = {
+
+        ...context,
+
+        data,
+
+        action:
+            actionName
+
+    };
+
+
+    /*
+     * --------------------------------------------------------
+     * ACTION CONFIGURATION
+     * --------------------------------------------------------
+     *
+     * Priority:
+     *
+     * 1. Action document config
+     * 2. context.actionConfig
+     * 3. empty config
+     *
+     * This makes the engine work whether the caller provides
+     * the complete Action document or only the action name.
+     */
+
+    let actionConfig;
+
+    if (
+        typeof action === "object" &&
+        action.config &&
+        typeof action.config === "object"
+    ) {
+
+        actionConfig =
+            action.config;
+
+    } else if (
+        context.actionConfig &&
+        typeof context.actionConfig === "object"
+    ) {
+
+        actionConfig =
+            context.actionConfig;
+
+    } else {
+
+        actionConfig = {};
+
+    }
+
+
+    /*
+     * Resolve the complete Action configuration once.
+     *
+     * This resolves things such as:
+     *
+     * {{data.user}}
+     * {{data.amount}}
+     * {{projectId}}
+     */
+
+    const resolvedActionConfig =
+        resolveObject(
+            actionConfig,
+            runtimeContext
+        );
+
+
+    /*
+     * --------------------------------------------------------
+     * COMPOSED ACTION
+     * --------------------------------------------------------
      */
 
     if (
-        Array.isArray(config.steps) &&
-        config.steps.length > 0
+        Array.isArray(
+            resolvedActionConfig.steps
+        )
     ) {
+
+        if (
+            resolvedActionConfig.steps.length === 0
+        ) {
+
+            throw new Error(
+                "Action steps must be a non-empty array"
+            );
+
+        }
+
 
         const results = [];
 
-        for (const rawStep of config.steps) {
 
-            if (
-                !rawStep ||
-                typeof rawStep !== "object"
-            ) {
-                throw new Error(
-                    "Invalid action step"
-                );
-            }
+        for (
+            let index = 0;
+            index < resolvedActionConfig.steps.length;
+            index++
+        ) {
 
             const step =
-                resolveObject(
-                    rawStep,
-                    context
+                resolvedActionConfig.steps[index];
+
+
+            if (
+                !step ||
+                typeof step !== "object"
+            ) {
+
+                throw new Error(
+                    `Action step ${index + 1} must be an object`
                 );
+
+            }
+
+
+            /*
+             * Resolve the step independently.
+             *
+             * This allows every step to use:
+             *
+             * {{data.*}}
+             * {{projectId}}
+             * {{item.*}}
+             */
+
+            const stepConfig =
+                resolveObject(
+                    step,
+                    runtimeContext
+                );
+
 
             const stepResource =
                 resolveValue(
-                    step.resource,
-                    context
+                    stepConfig.resource,
+                    runtimeContext
                 );
+
 
             const stepOperation =
                 resolveValue(
-                    step.operation,
-                    context
+                    stepConfig.operation,
+                    runtimeContext
                 );
+
 
             if (!stepResource) {
+
                 throw new Error(
-                    "Action step resource is required"
+                    `Action step ${index + 1}: resource is required`
                 );
+
             }
+
 
             if (!stepOperation) {
+
                 throw new Error(
-                    "Action step operation is required"
+                    `Action step ${index + 1}: operation is required`
                 );
+
             }
 
-            const specialResult =
-                await executeSpecialOperation(
-                    stepResource,
-                    stepOperation,
-                    context
-                );
 
-            if (specialResult !== null) {
-
-                results.push(
-                    specialResult
-                );
-
-                continue;
-            }
-
-            results.push(
+            const result =
                 await executeResourceAction(
+
                     stepResource,
+
                     stepOperation,
-                    step,
-                    context
-                )
-            );
+
+                    stepConfig,
+
+                    runtimeContext
+
+                );
+
+
+            results.push({
+
+                resource:
+                    stepResource,
+
+                operation:
+                    stepOperation,
+
+                result
+
+            });
+
         }
 
-        return sanitizeActionResult({
+
+        return {
+
             success: true,
+
+            action:
+                actionName,
+
             results
-        });
+
+        };
+
     }
 
-    const resource = resolveValue(
-        config.resource,
-        context
-    );
 
-    const operation = resolveValue(
-        config.operation,
-        context
-    );
+    /*
+     * --------------------------------------------------------
+     * HANDLER COMPATIBILITY
+     * --------------------------------------------------------
+     *
+     * Handlers remain supported for legacy/custom actions.
+     *
+     * The universal resource engine does not depend on them.
+     */
+
+    if (
+        resolvedActionConfig.handler &&
+        typeof context.executeHandler === "function"
+    ) {
+
+        return context.executeHandler(
+
+            resolvedActionConfig.handler,
+
+            runtimeContext
+
+        );
+
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * NORMAL RESOURCE ACTION
+     * --------------------------------------------------------
+     */
+
+    const resource =
+        resolveValue(
+            resolvedActionConfig.resource,
+            runtimeContext
+        );
+
+
+    const operation =
+        resolveValue(
+            resolvedActionConfig.operation,
+            runtimeContext
+        );
+
+
+    /*
+     * --------------------------------------------------------
+     * RESOURCE / OPERATION VALIDATION
+     * --------------------------------------------------------
+     */
 
     if (!resource) {
-        throw new Error("Action resource is required");
+
+        throw new Error(
+            "Action resource is required"
+        );
+
     }
+
 
     if (!operation) {
-        throw new Error("Action operation is required");
-    }
 
-    const resolvedRuntimeConfig = resolveObject(
-        config,
-        context
-    );
-
-    /*
-     * Special global operations do not require
-     * a database record or filter.
-     */
-    const specialResult =
-        await executeSpecialOperation(
-            resource,
-            operation,
-            context
+        throw new Error(
+            "Action operation is required"
         );
 
-    if (specialResult !== null) {
-        return specialResult;
     }
 
-    /*
-     * All normal operations continue through
-     * the universal resource engine.
-     */
-    const result =
-        await executeResourceAction(
-            resource,
-            operation,
-            resolvedRuntimeConfig,
-            context
-        );
 
-    return sanitizeActionResult(
-        result
+    /*
+     * --------------------------------------------------------
+     * EXECUTE
+     * --------------------------------------------------------
+     *
+     * At this point everything is resolved.
+     *
+     * Action
+     *   ↓
+     * Resource
+     *   ↓
+     * Operation
+     *   ↓
+     * Resource definition
+     *   ↓
+     * Database operation
+     */
+
+    return executeResourceAction(
+
+        resource,
+
+        operation,
+
+        resolvedActionConfig,
+
+        runtimeContext
+
     );
+
 }
+
 
 // ============================================================
 // EXPORTS
@@ -1674,12 +1812,14 @@ module.exports = {
 
     executeUniversalAction,
 
+    executeResourceAction,
+
+    resolveOperation,
+
     resolveValue,
 
     resolveObject,
 
-    resolveOperation,
-
-    resolveRecordId
+    getPath
 
 };

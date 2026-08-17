@@ -1,354 +1,434 @@
 const User = require("../models/User");
-const Project = require("../models/Project");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 
-// =========================
+// ============================================================
 // REGISTER USER
-// =========================
+// ============================================================
 
 const registerUser = async (req, res) => {
 
-try {
+    try {
 
-const projectKey = req.headers["x-api-key"];
+        /*
+         * Project authentication has already been performed
+         * by middleware/project.js.
+         *
+         * Do NOT look inside Project.apiKeys here.
+         *
+         * The middleware supports:
+         * - global API keys
+         * - project API keys
+         * - legacy project keys
+         */
 
-const {
-username,
-email,
-password
-} = req.body;
+        const project =
+            req.project || null;
 
+        const projectId =
+            req.projectId ||
+            project?._id ||
+            null;
 
-// Validate API Key
 
-if (!projectKey) {
+        if (!projectId) {
 
-return res.status(400).json({
+            return res.status(400).json({
 
-success: false,
-message: "Project API key is missing"
+                success: false,
 
-});
+                message:
+                    "Target project is required"
 
-}
+            });
 
+        }
 
-// Validate Input
 
-if (!username || !email || !password) {
+        const {
+            username,
+            email,
+            password
+        } = req.body;
 
-return res.status(400).json({
 
-success: false,
-message: "Username, email and password are required"
+        // ====================================================
+        // VALIDATE INPUT
+        // ====================================================
 
-});
+        if (
+            !username ||
+            !email ||
+            !password
+        ) {
 
-}
+            return res.status(400).json({
 
+                success: false,
 
-// Find Project
+                message:
+                    "Username, email and password are required"
 
-const project = await Project.findOne({
+            });
 
-status: "active",
+        }
 
-apiKeys: {
-$elemMatch: {
-key: projectKey,
-status: "active"
-}
-}
 
-});
+        // ====================================================
+        // CHECK EXISTING USER
+        // ====================================================
 
+        const existingUser =
+            await User.findOne({
 
-if (!project) {
+                project: projectId,
 
-return res.status(401).json({
+                $or: [
+                    { email },
+                    { username }
+                ]
 
-success: false,
-message: "Invalid project API key"
+            });
 
-});
 
-}
+        if (existingUser) {
 
+            return res.status(400).json({
 
-// Check if user already exists INSIDE this project
+                success: false,
 
-const existingUser = await User.findOne({
+                message:
+                    "Username or email already exists"
 
-project: project._id,
+            });
 
-$or: [
-{ email },
-{ username }
-]
+        }
 
-});
 
+        // ====================================================
+        // HASH PASSWORD
+        // ====================================================
 
-if (existingUser) {
+        const hashedPassword =
+            await bcrypt.hash(
+                password,
+                10
+            );
 
-return res.status(400).json({
 
-success: false,
-message: "Username or email already exists"
+        // ====================================================
+        // CREATE USER
+        // ====================================================
 
-});
+        const user =
+            await User.create({
 
-}
+                project: projectId,
 
+                username,
 
-// Hash Password
+                email,
 
-const hashedPassword = await bcrypt.hash(password, 10);
+                password: hashedPassword
 
+            });
 
-// Create User
 
-const user = await User.create({
+        // ====================================================
+        // SUCCESS
+        // ====================================================
 
-project: project._id,
+        return res.status(201).json({
 
-username,
+            success: true,
 
-email,
+            message:
+                "Account created successfully",
 
-password: hashedPassword
+            user: {
 
-});
+                id:
+                    user._id,
 
+                username:
+                    user.username,
 
-// Success
+                email:
+                    user.email,
 
-res.status(201).json({
+                project:
+                    project?.name ||
+                    projectId
 
-success: true,
+            }
 
-message: "Account created successfully",
+        });
 
-user: {
 
-id: user._id,
+    } catch (error) {
 
-username: user.username,
+        console.error(
+            "REGISTER USER ERROR:",
+            error
+        );
 
-email: user.email,
 
-project: project.name
+        return res.status(500).json({
 
-}
+            success: false,
 
-});
+            message:
+                error.message
 
-} catch (error) {
+        });
 
-res.status(500).json({
-
-success: false,
-
-message: error.message
-
-});
-
-}
+    }
 
 };
 
 
-
-
-// =========================
+// ============================================================
 // LOGIN USER
-// =========================
+// ============================================================
 
 const loginUser = async (req, res) => {
 
-try {
+    try {
 
-const projectKey = req.headers["x-api-key"];
+        /*
+         * API-key authentication has already happened in:
+         *
+         *     middleware/project.js
+         *
+         * This means req.projectId is the authoritative
+         * project selected by the API key.
+         *
+         * This works with both:
+         *
+         *     global API key + X-Project-ID
+         *
+         * and:
+         *
+         *     normal project API key
+         */
 
-const {
-email,
-password
-} = req.body;
+        const project =
+            req.project || null;
 
+        const projectId =
+            req.projectId ||
+            project?._id ||
+            null;
 
-// Validate API Key
 
-if (!projectKey) {
+        if (!projectId) {
 
-return res.status(400).json({
+            return res.status(400).json({
 
-success: false,
-message: "Project API key is missing"
+                success: false,
 
-});
+                message:
+                    "Target project is required"
 
-}
+            });
 
+        }
 
-// Find Project
 
-const project = await Project.findOne({
+        const {
+            email,
+            password
+        } = req.body;
 
-status: "active",
 
-apiKeys: {
-$elemMatch: {
-key: projectKey,
-status: "active"
-}
-}
+        // ====================================================
+        // VALIDATE INPUT
+        // ====================================================
 
-});
+        if (
+            !email ||
+            !password
+        ) {
 
+            return res.status(400).json({
 
-if (!project) {
+                success: false,
 
-return res.status(401).json({
+                message:
+                    "Email and password are required"
 
-success: false,
-message: "Invalid project API key"
+            });
 
-});
+        }
 
-}
 
+        // ====================================================
+        // FIND USER INSIDE TARGET PROJECT
+        // ====================================================
 
-// Find User ONLY inside this project
+        const user =
+            await User.findOne({
 
-const user = await User.findOne({
+                email,
 
-email,
+                project: projectId
 
-project: project._id
+            });
 
-});
 
+        if (!user) {
 
-if (!user) {
+            return res.status(400).json({
 
-return res.status(400).json({
+                success: false,
 
-success: false,
+                message:
+                    "Invalid email or password"
 
-message: "Invalid email or password"
+            });
 
-});
+        }
 
-}
 
+        // ====================================================
+        // COMPARE PASSWORD
+        // ====================================================
 
-// Compare Password
+        const validPassword =
+            await bcrypt.compare(
+                password,
+                user.password
+            );
 
-const validPassword = await bcrypt.compare(
 
-password,
+        if (!validPassword) {
 
-user.password
+            return res.status(400).json({
 
-);
+                success: false,
 
+                message:
+                    "Invalid email or password"
 
-if (!validPassword) {
+            });
 
-return res.status(400).json({
+        }
 
-success: false,
 
-message: "Invalid email or password"
+        // ====================================================
+        // GENERATE JWT
+        // ====================================================
 
-});
+        const token =
+            jwt.sign(
 
-}
+                {
 
+                    id:
+                        user._id,
 
-// Generate JWT
+                    role:
+                        user.role,
 
-const token = jwt.sign(
+                    platformRole:
+                        user.platformRole,
 
-{
+                    project:
+                        user.project
 
-id: user._id,
+                },
 
-role: user.role,
+                process.env.JWT_SECRET,
 
-platformRole: user.platformRole,
+                {
 
-project: user.project
+                    expiresIn:
+                        "7d"
 
-},
+                }
 
-process.env.JWT_SECRET,
+            );
 
-{
 
-expiresIn: "7d"
+        // ====================================================
+        // UPDATE LOGIN TIME
+        // ====================================================
 
-}
+        user.lastLogin =
+            new Date();
 
-);
+        await user.save();
 
 
-// Update Login Time
+        // ====================================================
+        // SUCCESS
+        // ====================================================
 
-user.lastLogin = new Date();
+        return res.json({
 
-await user.save();
+            success: true,
 
+            message:
+                "Login successful",
 
-// Success
+            token,
 
-res.json({
+            user: {
 
-success: true,
+                id:
+                    user._id,
 
-message: "Login successful",
+                username:
+                    user.username,
 
-token,
+                email:
+                    user.email,
 
-user: {
+                role:
+                    user.role,
 
-id: user._id,
+                platformRole:
+                    user.platformRole,
 
-username: user.username,
+                project:
+                    user.project
 
-email: user.email,
+            }
 
-role: user.role,
+        });
 
-platformRole: user.platformRole,
 
-project: user.project
+    } catch (error) {
 
-}
+        console.error(
+            "LOGIN USER ERROR:",
+            error
+        );
 
-});
 
-} catch (error) {
+        return res.status(500).json({
 
-res.status(500).json({
+            success: false,
 
-success: false,
+            message:
+                error.message
 
-message: error.message
+        });
 
-});
-
-}
+    }
 
 };
 
 
+// ============================================================
+// EXPORTS
+// ============================================================
+
 module.exports = {
 
-registerUser,
+    registerUser,
 
-loginUser
+    loginUser
 
 };

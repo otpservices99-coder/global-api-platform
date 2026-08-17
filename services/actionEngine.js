@@ -1,32 +1,48 @@
+const handlers =
+    require("../handlers");
+
 const {
     executeUniversalAction
 } = require("./universalActionEngine");
 
-const handlers = require("../handlers");
+
+// ============================================================
+// DETECT UNIVERSAL ACTION CONFIGURATION
+// ============================================================
+
+function hasUniversalConfiguration(action) {
+
+    if (!action) {
+        return false;
+    }
+
+    const config =
+        action.config || {};
+
+    // Composed dynamic action
+    if (
+        Array.isArray(config.steps) &&
+        config.steps.length > 0
+    ) {
+        return true;
+    }
+
+    // Single dynamic action
+    if (
+        typeof config.resource === "string" &&
+        config.resource.trim() &&
+        typeof config.operation === "string" &&
+        config.operation.trim()
+    ) {
+        return true;
+    }
+
+    return false;
+}
 
 
 // ============================================================
-// EXECUTE SINGLE ACTION
-// ============================================================
-//
-// Priority:
-//
-// 1. Registered handler
-// 2. Universal resource/operation action
-//
-// This is important because an action such as:
-//
-//     wallet.credit
-//
-// has a real business handler and must not accidentally be
-// redirected into generic CRUD/increment logic.
-//
-// New actions that do not have a registered handler can still
-// work dynamically through:
-//
-//     config.resource
-//     config.operation
-//
+// EXECUTE ACTION
 // ============================================================
 
 async function executeAction(
@@ -52,13 +68,66 @@ async function executeAction(
     }
 
 
-    const config =
-        action.config || {};
+    /*
+     * --------------------------------------------------------
+     * UNIVERSAL CONFIGURATION FIRST
+     * --------------------------------------------------------
+     *
+     * The Action document itself is passed directly to the
+     * Universal Action Engine.
+     *
+     * The engine receives:
+     *
+     * action.name
+     * action.config
+     *
+     * and the runtime context separately.
+     *
+     * This keeps Action -> Resource -> Operation completely
+     * generic.
+     */
+
+    if (
+        hasUniversalConfiguration(action)
+    ) {
+
+        return executeUniversalAction(
+
+            action,
+
+            context.data || {},
+
+            {
+                ...context,
+
+                projectId:
+                    context.projectId,
+
+                actorId:
+                    context.actorId || null,
+
+                userId:
+                    context.userId || null,
+
+                req:
+                    context.req || null,
+
+                event:
+                    context.event || null
+            }
+
+        );
+
+    }
 
 
-    // ========================================================
-    // 1. EXPLICIT HANDLER FIRST
-    // ========================================================
+    /*
+     * --------------------------------------------------------
+     * FALLBACK HANDLER
+     * --------------------------------------------------------
+     *
+     * Legacy/custom handlers remain supported.
+     */
 
     if (
         typeof handlers.execute === "function"
@@ -74,7 +143,6 @@ async function executeAction(
                     ...context,
 
                     action
-
                 }
 
             );
@@ -82,11 +150,8 @@ async function executeAction(
         } catch (error) {
 
             /*
-             * Only fall through to the universal engine when
-             * the handler does not actually exist.
-             *
-             * A real handler throwing an error must NOT be
-             * silently replaced by universal execution.
+             * If a real handler exists but fails, preserve the
+             * actual error.
              */
 
             const message =
@@ -109,41 +174,11 @@ async function executeAction(
     }
 
 
-    // ========================================================
-    // 2. UNIVERSAL DYNAMIC ACTION
-    // ========================================================
-    //
-    // No registered handler exists.
-    //
-    // If the Action definition contains:
-    //
-    //     resource
-    //     operation
-    //
-    // the universal engine handles it dynamically.
-    //
-    // ========================================================
-
-    return executeUniversalAction({
-
-        actionRecord: action,
-
-        projectId: context.projectId,
-
-        actorId: context.actorId || null,
-
-        userId: context.userId || null,
-
-        data: context.data || {},
-
-        req: context.req || null
-
-    });
-
-
-    // ========================================================
-    // 3. NOTHING CAN EXECUTE THE ACTION
-    // ========================================================
+    /*
+     * --------------------------------------------------------
+     * NOTHING CAN EXECUTE THE ACTION
+     * --------------------------------------------------------
+     */
 
     throw new Error(
         `No executor found for action '${action.name}'`
@@ -174,7 +209,6 @@ async function processActions(
                 action,
 
                 {
-
                     projectId:
                         event.project,
 
@@ -194,7 +228,6 @@ async function processActions(
                         event.req || null,
 
                     event
-
                 }
 
             );
@@ -221,13 +254,15 @@ async function processActions(
 
 
 // ============================================================
-// EXPORT
+// EXPORTS
 // ============================================================
 
 module.exports = {
 
     executeAction,
 
-    processActions
+    processActions,
+
+    hasUniversalConfiguration
 
 };

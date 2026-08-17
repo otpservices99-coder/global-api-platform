@@ -1,75 +1,49 @@
 const mongoose = require("mongoose");
 
+const apiKeySchema = new mongoose.Schema(
+    {
+        project: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Project",
+            required: false,
+            default: null
+        },
 
-const apiKeySchema = new mongoose.Schema({
+        key: {
+            type: String,
+            required: true,
+            unique: true
+        },
 
-project:{
+        name: {
+            type: String,
+            default: "Default Key"
+        },
 
-type:mongoose.Schema.Types.ObjectId,
+        scope: {
+            type: String,
+            enum: ["project", "global"],
+            default: "project"
+        },
 
-ref:"Project",
+        permissions: {
+            type: [String],
+            default: ["*"]
+        },
 
-required:true
+        active: {
+            type: Boolean,
+            default: true
+        },
 
-},
-
-
-key:{
-
-type:String,
-
-required:true,
-
-unique:true
-
-},
-
-
-name:{
-
-type:String,
-
-default:"Default Key"
-
-},
-
-
-permissions:{
-
-type:[String],
-
-default:[
-"*"
-]
-
-},
-
-
-active:{
-
-type:Boolean,
-
-default:true
-
-},
-
-
-lastUsedAt:{
-
-type:Date,
-
-default:null
-
-}
-
-
-},
-{
-timestamps:true
-});
-
-
-module.exports = mongoose.model(
-"ApiKey",
-apiKeySchema
+        lastUsedAt: {
+            type: Date,
+            default: null
+        }
+    },
+    {
+        timestamps: true
+    }
 );
+
+module.exports = mongoose.model("ApiKey", apiKeySchema);

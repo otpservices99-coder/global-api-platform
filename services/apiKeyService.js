@@ -4,23 +4,6 @@ const ApiKey = require("../models/ApiKey");
 const Project = require("../models/Project");
 
 
-/*
-|--------------------------------------------------------------------------
-| API KEY SERVICE
-|--------------------------------------------------------------------------
-|
-| Central API-key resolver for the entire platform.
-|
-| Supports:
-|
-| 1. New global ApiKey collection
-| 2. Legacy Project.apiKeys
-|
-| The new ApiKey collection takes priority.
-|
-*/
-
-
 const resolveApiKey = async (key) => {
 
     if (!key) {
@@ -42,6 +25,34 @@ const resolveApiKey = async (key) => {
 
     if (apiKey) {
 
+        /*
+        |--------------------------------------------------------------------------
+        | GLOBAL KEY
+        |--------------------------------------------------------------------------
+        */
+
+        if (apiKey.scope === "global") {
+
+            apiKey.lastUsedAt = new Date();
+
+            await apiKey.save();
+
+            return {
+                project: apiKey.project || null,
+                apiKey,
+                permissions: apiKey.permissions || ["*"],
+                source: "global",
+                global: true
+            };
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | PROJECT KEY
+        |--------------------------------------------------------------------------
+        */
+
         if (!apiKey.project) {
             return null;
         }
@@ -52,31 +63,19 @@ const resolveApiKey = async (key) => {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Update usage timestamp
-        |--------------------------------------------------------------------------
-        */
-
         apiKey.lastUsedAt = new Date();
 
         await apiKey.save();
 
 
         return {
-
             project: apiKey.project,
-
             apiKey,
-
             permissions: apiKey.permissions || ["*"],
-
-            source: "apiKey"
-
+            source: "apiKey",
+            global: false
         };
-
     }
-
 
 
     /*
@@ -86,7 +85,6 @@ const resolveApiKey = async (key) => {
     */
 
     const project = await Project.findOne({
-
         status: "active",
 
         apiKeys: {
@@ -95,7 +93,6 @@ const resolveApiKey = async (key) => {
                 status: "active"
             }
         }
-
     });
 
 
@@ -103,12 +100,6 @@ const resolveApiKey = async (key) => {
         return null;
     }
 
-
-    /*
-    |--------------------------------------------------------------------------
-    | Find legacy key
-    |--------------------------------------------------------------------------
-    */
 
     const legacyKey = project.apiKeys.find(
         item =>
@@ -122,31 +113,18 @@ const resolveApiKey = async (key) => {
         legacyKey.lastUsed = new Date();
 
         await project.save();
-
     }
 
 
     return {
-
         project,
-
         apiKey: legacyKey || null,
-
         permissions: ["*"],
-
-        source: "legacy"
-
+        source: "legacy",
+        global: false
     };
-
 };
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Generate API Key
-|--------------------------------------------------------------------------
-*/
 
 const generateApiKey = () => {
 
@@ -156,13 +134,6 @@ const generateApiKey = () => {
 
 };
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Check Permission
-|--------------------------------------------------------------------------
-*/
 
 const hasPermission = (apiKey, permission) => {
 
@@ -181,17 +152,11 @@ const hasPermission = (apiKey, permission) => {
 
 
     return permissions.includes(permission);
-
 };
 
 
-
 module.exports = {
-
     resolveApiKey,
-
     generateApiKey,
-
     hasPermission
-
 };
