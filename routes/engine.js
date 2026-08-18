@@ -22,38 +22,19 @@ const protect = require("../middleware/auth");
 |
 | POST /api/v1/engine
 |
-| Generic execution gateway for the entire platform.
+| Universal execution gateway.
 |
-| Request:
+| The route is intentionally thin:
 |
-| {
-|     "action": "wallet.credit",
-|     "data": {
-|         "user": "...",
-|         "amount": 500
-|     }
-| }
-|
-|--------------------------------------------------------------------------
-| SECURITY
-|--------------------------------------------------------------------------
-|
-| Project/API-key authentication is provided by:
-|
-|     middleware/project.js
-|
-| API-key permissions are checked here.
-|
-| JWT authentication is optional.
-|
-| This keeps the engine reusable for:
-|
-| - backend services
-| - frontend applications
-| - automation
-| - workflows
-| - integrations
-| - admin systems
+|   API key
+|       ↓
+|   Project
+|       ↓
+|   Action definition
+|       ↓
+|   Action Engine
+|       ↓
+|   Real execution
 |
 |--------------------------------------------------------------------------
 */
@@ -61,46 +42,34 @@ const protect = require("../middleware/auth");
 
 router.post(
     "/",
-    async (req, res, next) => {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Optional JWT authentication
-        |--------------------------------------------------------------------------
-        |
-        | If a Bearer token exists, load req.user.
-        |
-        | Requests without a JWT are still allowed to continue
-        | because API-key authentication is the primary engine
-        | authentication mechanism.
-        |
-        */
+    // ------------------------------------------------------------
+    // OPTIONAL JWT
+    // ------------------------------------------------------------
+
+    async (req, res, next) => {
 
         if (
             req.headers.authorization &&
             req.headers.authorization.startsWith("Bearer ")
         ) {
-
             return protect(
                 req,
                 res,
                 () => next()
             );
-
         }
 
         next();
-
     },
+
+    // ------------------------------------------------------------
+    // EXECUTION
+    // ------------------------------------------------------------
+
     async (req, res) => {
 
         try {
-
-            /*
-            |--------------------------------------------------------------------------
-            | PROJECT CONTEXT
-            |--------------------------------------------------------------------------
-            */
 
             const projectId =
                 req.project?._id ||
@@ -108,138 +77,76 @@ router.post(
                 req.projectId;
 
             if (!projectId) {
-
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Project context not available"
-
                 });
-
             }
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | ACTION NAME
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // ACTION NAME
+            // ----------------------------------------------------
 
             const actionName =
                 String(
                     req.body?.action || ""
                 ).trim();
 
-
             if (!actionName) {
-
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Action name is required"
-
                 });
-
             }
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | ACTION DATA
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // DATA
+            // ----------------------------------------------------
 
             const data =
                 req.body?.data &&
-                typeof req.body.data === "object"
+                typeof req.body.data === "object" &&
+                !Array.isArray(req.body.data)
                     ? req.body.data
                     : {};
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | FIND ACTION
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // ACTION
+            // ----------------------------------------------------
 
             const action =
                 await Action.findOne({
-
                     project: projectId,
-
                     name: actionName,
-
                     enabled: true
-
                 });
-
 
             if (!action) {
-
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         `Action '${actionName}' is not available`
-
                 });
-
             }
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | API KEY PERMISSION
-            |--------------------------------------------------------------------------
-            |
-            | Permission format:
-            |
-            |     resource.operation
-            |
-            | Examples:
-            |
-            |     wallet.credit
-            |     wallet.debit
-            |     withdrawal.request
-            |     withdrawal.approve
-            |     user.status_update
-            |
-            | Wildcard:
-            |
-            |     *
-            |
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // PERMISSION
+            // ----------------------------------------------------
 
-            const apiKeyPermission =
+            const directPermission =
                 hasPermission(
                     req.apiKey,
                     actionName
                 );
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | FALLBACK TO RESOLVED PERMISSIONS
-            |--------------------------------------------------------------------------
-            |
-            | The middleware also exposes:
-            |
-            |     req.apiKeyPermissions
-            |
-            | Support that value as well so the engine remains
-            | compatible with both current and future API-key
-            | implementations.
-            |
-            */
-
             const resolvedPermission =
-                apiKeyPermission ||
+                directPermission ||
                 (
                     Array.isArray(
                         req.apiKeyPermissions
@@ -250,34 +157,27 @@ router.post(
                     )
                 );
 
-
             if (!resolvedPermission) {
-
                 return res.status(403).json({
-
                     success: false,
-
                     message:
                         "API key does not have permission to execute this action",
-
                     action:
                         actionName
-
                 });
-
             }
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | BUILD EVENT
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // EVENT
+            // ----------------------------------------------------
 
             const event = {
 
                 project:
                     projectId,
+
+                projectId,
 
                 name:
                     `manual.${actionName}`,
@@ -287,6 +187,11 @@ router.post(
 
                 entityId:
                     action._id,
+
+                actorId:
+                    req.user?._id ||
+                    req.user?.id ||
+                    null,
 
                 userId:
                     req.user?._id ||
@@ -314,42 +219,64 @@ router.post(
                         req.ip,
 
                     userAgent:
-                        req.get(
-                            "user-agent"
-                        ) || null,
+                        req.get("user-agent") ||
+                        null,
 
                     apiKeySource:
                         req.apiKeySource ||
                         null
-
                 }
-
             };
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | EXECUTE ACTION
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // EXECUTE
+            // ----------------------------------------------------
 
             const result =
                 await processActions(
-
                     event,
-
                     [action]
-
                 );
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | RESPONSE
-            |--------------------------------------------------------------------------
-            */
+            // ----------------------------------------------------
+            // NEVER REPORT A FAILED ACTION AS SUCCESS
+            // ----------------------------------------------------
 
-            return res.json({
+            const actionResult =
+                Array.isArray(result)
+                    ? result[0]
+                    : result;
+
+            const executionSucceeded =
+                actionResult &&
+                actionResult.success === true;
+
+            if (!executionSucceeded) {
+
+                return res.status(422).json({
+
+                    success: false,
+
+                    action:
+                        actionName,
+
+                    result,
+
+                    message:
+                        actionResult?.error ||
+                        actionResult?.message ||
+                        "Action execution failed"
+                });
+            }
+
+
+            // ----------------------------------------------------
+            // REAL SUCCESS
+            // ----------------------------------------------------
+
+            return res.status(200).json({
 
                 success: true,
 
@@ -357,7 +284,6 @@ router.post(
                     actionName,
 
                 result
-
             });
 
 
@@ -368,19 +294,15 @@ router.post(
                 error
             );
 
-
             return res.status(500).json({
 
                 success: false,
 
                 message:
-                    error.message ||
+                    error?.message ||
                     "Action execution failed"
-
             });
-
         }
-
     }
 );
 

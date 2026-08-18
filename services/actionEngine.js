@@ -2,22 +2,26 @@
 // GLOBAL ACTION ENGINE
 // ============================================================
 //
-// Universal execution priority:
+// Compatibility facade.
 //
-// 1. Explicit Resource -> Operation configuration
-// 2. Explicit multi-step universal configuration
-// 3. Explicit configured handler
-// 4. Explicit handler type
-// 5. Legacy registered handler
+// Execution:
 //
-// The universal configuration always wins when an Action
-// explicitly defines a Resource/Operation or Steps.
+// Action
+//   ↓
+// Registered Handler OR Universal Action Engine
+//   ↓
+// Real Resource Operation
+//   ↓
+// Verify result
+//   ↓
+// Sanitize result
 //
-// No Earnify-specific action names are implemented here.
+// No project-specific action names.
 // ============================================================
 
 const {
-    executeUniversalAction
+    executeUniversalAction,
+    sanitizeActionResult
 } = require("./universalActionEngine");
 
 const {
@@ -27,10 +31,11 @@ const {
 
 
 // ============================================================
-// HELPERS
+// ACTION NAME
 // ============================================================
 
 function getActionName(action) {
+
     return (
         action?.name ||
         action?.action ||
@@ -40,44 +45,37 @@ function getActionName(action) {
 }
 
 
-function hasUniversalConfiguration(action) {
-    if (!action) {
-        return false;
-    }
+// ============================================================
+// EXECUTION RESULT VALIDATION
+// ============================================================
 
-    const config =
-        action.config &&
-        typeof action.config === "object"
-            ? action.config
-            : {};
+function assertExecutionSucceeded(
+    result,
+    actionName
+) {
 
-    // Explicit handler configuration is handler-based.
     if (
-        typeof config.handler === "string" &&
-        config.handler.trim()
+        result === undefined ||
+        result === null
     ) {
-        return false;
+        throw new Error(
+            `Action '${actionName}' executed but returned no result`
+        );
     }
 
-    // Explicit multi-step universal action.
+
     if (
-        Array.isArray(config.steps) &&
-        config.steps.length > 0
+        typeof result === "object" &&
+        result.success === false
     ) {
-        return true;
+        throw new Error(
+            result.message ||
+            `Action '${actionName}' failed`
+        );
     }
 
-    // Explicit Resource -> Operation action.
-    if (
-        typeof config.resource === "string" &&
-        config.resource.trim() &&
-        typeof config.operation === "string" &&
-        config.operation.trim()
-    ) {
-        return true;
-    }
 
-    return false;
+    return result;
 }
 
 
@@ -85,15 +83,24 @@ function hasUniversalConfiguration(action) {
 // EXECUTE ONE ACTION
 // ============================================================
 
-async function executeAction(action, context = {}) {
+async function executeAction(
+    action,
+    context = {}
+) {
 
     if (!action) {
-        throw new Error("Action is required");
+        throw new Error(
+            "Action is required"
+        );
     }
 
+
     if (action.enabled === false) {
-        throw new Error("Action is disabled");
+        throw new Error(
+            "Action is disabled"
+        );
     }
+
 
     const projectId =
         context.projectId ||
@@ -101,86 +108,57 @@ async function executeAction(action, context = {}) {
         null;
 
     if (!projectId) {
-        throw new Error("Project ID is required");
+        throw new Error(
+            "Project ID is required"
+        );
     }
+
 
     const actionName =
         getActionName(action);
 
     if (!actionName) {
-        throw new Error("Action name is required");
+        throw new Error(
+            "Action name is required"
+        );
     }
 
+
     const runtimeContext = {
+
         projectId,
 
         actorId:
-            context.actorId || null,
+            context.actorId ||
+            null,
 
         userId:
-            context.userId || null,
+            context.userId ||
+            null,
 
         data:
-            context.data || {},
+            context.data ||
+            {},
 
         req:
-            context.req || null,
+            context.req ||
+            null,
 
         event:
-            context.event || null,
+            context.event ||
+            null,
 
-        action
+        action,
+
+        actionName
     };
 
 
-    // ========================================================
-    // 1. UNIVERSAL CONFIGURATION
-    // ========================================================
-    //
-    // If the database explicitly defines:
-    //
-    //     resource
-    //     operation
-    //
-    // or:
-    //
-    //     steps
-    //
-    // the Universal Action Engine is authoritative.
-    //
-    // This is what makes future actions dynamically executable
-    // without registering another JavaScript handler.
-    // ========================================================
-
-    if (
-        hasUniversalConfiguration(action)
-    ) {
-
-        return executeUniversalAction({
-            actionRecord: action,
-
-            projectId,
-
-            actorId:
-                context.actorId || null,
-
-            userId:
-                context.userId || null,
-
-            data:
-                context.data || {},
-
-            req:
-                context.req || null,
-
-            event:
-                context.event || null
-        });
-    }
+    let result;
 
 
     // ========================================================
-    // 2. EXPLICITLY CONFIGURED HANDLER
+    // EXPLICIT HANDLER
     // ========================================================
 
     const configuredHandler =
@@ -191,62 +169,122 @@ async function executeAction(action, context = {}) {
 
     if (configuredHandler) {
 
-        return execute(
-            configuredHandler,
-            runtimeContext
+        result =
+            await execute(
+                configuredHandler,
+                runtimeContext
+            );
+
+        result =
+            assertExecutionSucceeded(
+                result,
+                actionName
+            );
+
+        return sanitizeActionResult(
+            result
         );
     }
 
 
     // ========================================================
-    // 3. EXPLICIT HANDLER TYPE
+    // HANDLER ACTION
     // ========================================================
 
-    if (
-        action.type === "handler"
-    ) {
+    if (action.type === "handler") {
 
-        return execute(
-            actionName,
-            runtimeContext
+        result =
+            await execute(
+                actionName,
+                runtimeContext
+            );
+
+        result =
+            assertExecutionSucceeded(
+                result,
+                actionName
+            );
+
+        return sanitizeActionResult(
+            result
         );
     }
 
 
     // ========================================================
-    // 4. LEGACY REGISTERED HANDLER
-    // ========================================================
-    //
-    // Kept only for backward compatibility with existing
-    // actions that have not yet been converted to universal
-    // Resource -> Operation configuration.
-    //
-    // It can NEVER override explicit universal configuration.
+    // REGISTERED HANDLER
     // ========================================================
 
-    if (
-        has(actionName)
-    ) {
+    if (has(actionName)) {
 
-        return execute(
-            actionName,
-            runtimeContext
+        result =
+            await execute(
+                actionName,
+                runtimeContext
+            );
+
+        result =
+            assertExecutionSucceeded(
+                result,
+                actionName
+            );
+
+        return sanitizeActionResult(
+            result
         );
     }
 
 
     // ========================================================
-    // 5. NO EXECUTION STRATEGY
+    // UNIVERSAL ACTION
     // ========================================================
 
-    throw new Error(
-        `Action '${actionName}' has no executable configuration`
+    result =
+        await executeUniversalAction({
+
+            actionRecord:
+                action,
+
+            projectId,
+
+            actorId:
+                context.actorId ||
+                null,
+
+            userId:
+                context.userId ||
+                null,
+
+            data:
+                context.data ||
+                {},
+
+            req:
+                context.req ||
+                null
+        });
+
+
+    result =
+        assertExecutionSucceeded(
+            result,
+            actionName
+        );
+
+
+    return sanitizeActionResult(
+        result
     );
 }
 
 
 // ============================================================
 // PROCESS MULTIPLE ACTIONS
+// ============================================================
+//
+// Every action is isolated.
+//
+// One failure does not turn into success.
 // ============================================================
 
 async function processActions(
@@ -260,9 +298,18 @@ async function processActions(
         );
     }
 
+
     const results = [];
 
-    for (const action of actions) {
+
+    for (
+        const action
+        of actions
+    ) {
+
+        const actionName =
+            getActionName(action);
+
 
         try {
 
@@ -270,6 +317,7 @@ async function processActions(
                 await executeAction(
                     action,
                     {
+
                         projectId:
                             event.project ||
                             event.projectId ||
@@ -297,36 +345,104 @@ async function processActions(
                     }
                 );
 
+
             results.push({
 
                 action:
-                    getActionName(action),
+                    actionName,
 
                 success:
-                    result?.success !== false,
+                    true,
 
                 result
-
             });
+
 
         } catch (error) {
 
             results.push({
 
                 action:
-                    getActionName(action),
+                    actionName,
 
-                success: false,
+                success:
+                    false,
 
                 error:
                     error?.message ||
                     "Action execution failed"
-
             });
         }
     }
 
+
     return results;
+}
+
+
+// ============================================================
+// UNIVERSAL CONFIGURATION DETECTION
+// ============================================================
+
+function hasUniversalConfiguration(
+    action
+) {
+
+    if (!action) {
+        return false;
+    }
+
+
+    const config =
+        action.config &&
+        typeof action.config === "object"
+            ? action.config
+            : {};
+
+
+    if (action.type === "handler") {
+        return false;
+    }
+
+
+    if (
+        typeof config.handler === "string" &&
+        config.handler.trim()
+    ) {
+        return false;
+    }
+
+
+    if (
+        Array.isArray(config.steps) &&
+        config.steps.length > 0
+    ) {
+        return true;
+    }
+
+
+    return (
+        typeof config.resource === "string" &&
+        config.resource.trim() &&
+        typeof config.operation === "string" &&
+        config.operation.trim()
+    );
+}
+
+
+// ============================================================
+// BACKWARD COMPATIBILITY
+// ============================================================
+
+async function processAction(
+    action,
+    context = {}
+) {
+
+    return executeAction(
+        action,
+        context
+    );
 }
 
 
@@ -335,7 +451,14 @@ async function processActions(
 // ============================================================
 
 module.exports = {
+
     executeAction,
+
+    executeUniversalAction,
+
+    processAction,
+
     processActions,
+
     hasUniversalConfiguration
 };

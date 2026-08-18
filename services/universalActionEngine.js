@@ -1,9 +1,12 @@
-const resourceService = require("./resourceService");
+const resourceService =
+    require("./resourceService");
+
 const {
     execute: executeHandler,
     registry: handlerRegistry,
     loadHandlers
 } = require("../handlers");
+
 
 // ============================================================================
 // UNIVERSAL ACTION ENGINE
@@ -11,44 +14,126 @@ const {
 //
 // GLOBAL / CONFIGURATION-DRIVEN EXECUTION
 //
-// Execution priority:
+// Action
+//   ↓
+// Resource
+//   ↓
+// Operation
+//   ↓
+// ResourceService
 //
-// 1. Explicitly configured Resource -> Operation
-// 2. Registered generic Action Handler
-// 3. Configuration error
+// OR
 //
-// This engine contains NO project-specific action names.
+// Action
+//   ↓
+// Registered Handler
 //
-// Examples:
-//
-// Resource action:
-//
-//   Action
-//      ↓
-//   Resource
-//      ↓
-//   Operation
-//      ↓
-//   ResourceService
-//
-// Handler action:
-//
-//   Action
-//      ↓
-//   Registered Handler
-//
-// Handler discovery is dynamic through handlers/index.js.
+// No project-specific action names.
 // ============================================================================
+
+
+// ============================================================================
+// SENSITIVE RESULT FIELDS
+// ============================================================================
+
+const SENSITIVE_FIELDS = new Set([
+
+    "password",
+    "passwordHash",
+    "hashedPassword",
+
+    "token",
+    "accessToken",
+    "refreshToken",
+
+    "apiKey",
+    "api_key",
+
+    "secret",
+    "secretKey",
+
+    "privateKey",
+    "private_key",
+
+    "jwt",
+
+    "authorization",
+
+    "otp",
+    "otpCode",
+
+    "securityAnswer",
+    "securityQuestion",
+
+    "clientSecret",
+    "client_secret"
+]);
+
+
+// ============================================================================
+// RESULT SANITIZATION
+// ============================================================================
+
+function sanitizeActionResult(value) {
+
+    if (Array.isArray(value)) {
+
+        return value.map(
+            sanitizeActionResult
+        );
+    }
+
+
+    if (
+        value &&
+        typeof value === "object"
+    ) {
+
+        const output = {};
+
+
+        for (
+            const [key, child]
+            of Object.entries(value)
+        ) {
+
+            if (
+                SENSITIVE_FIELDS.has(
+                    key
+                )
+            ) {
+                continue;
+            }
+
+
+            output[key] =
+                sanitizeActionResult(
+                    child
+                );
+        }
+
+
+        return output;
+    }
+
+
+    return value;
+}
 
 
 // ============================================================================
 // PATH RESOLUTION
 // ============================================================================
 
-function getPath(object, path) {
+function getPath(
+    object,
+    path
+) {
+
     if (!path) {
         return undefined;
     }
+
 
     if (
         typeof path !== "string" ||
@@ -57,10 +142,14 @@ function getPath(object, path) {
         return object?.[path];
     }
 
+
     return path
         .split(".")
         .reduce(
-            (current, key) =>
+            (
+                current,
+                key
+            ) =>
                 current == null
                     ? undefined
                     : current[key],
@@ -73,29 +162,46 @@ function getPath(object, path) {
 // TEMPLATE RESOLUTION
 // ============================================================================
 
-function resolveValue(value, context) {
-    if (typeof value !== "string") {
+function resolveValue(
+    value,
+    context
+) {
+
+    if (
+        typeof value !== "string"
+    ) {
         return value;
     }
 
+
     const exact =
-        value.match(/^{{\s*([^}]+)\s*}}$/);
+        value.match(
+            /^{{\s*([^}]+)\s*}}$/
+        );
+
 
     if (exact) {
+
         return getPath(
             context,
             exact[1].trim()
         );
     }
 
+
     return value.replace(
         /{{\s*([^}]+)\s*}}/g,
-        (_, expression) => {
+        (
+            _,
+            expression
+        ) => {
+
             const resolved =
                 getPath(
                     context,
                     expression.trim()
                 );
+
 
             return resolved == null
                 ? ""
@@ -109,19 +215,36 @@ function resolveValue(value, context) {
 // OBJECT RESOLUTION
 // ============================================================================
 
-function resolveObject(value, context) {
+function resolveObject(
+    value,
+    context
+) {
+
     if (Array.isArray(value)) {
-        return value.map(item =>
-            resolveObject(item, context)
+
+        return value.map(
+            item =>
+                resolveObject(
+                    item,
+                    context
+                )
         );
     }
+
 
     if (
         value &&
         typeof value === "object"
     ) {
-        return Object.entries(value).reduce(
-            (output, [key, child]) => {
+
+        return Object.entries(
+            value
+        ).reduce(
+            (
+                output,
+                [key, child]
+            ) => {
+
                 output[key] =
                     resolveObject(
                         child,
@@ -129,10 +252,12 @@ function resolveObject(value, context) {
                     );
 
                 return output;
+
             },
             {}
         );
     }
+
 
     return resolveValue(
         value,
@@ -145,9 +270,16 @@ function resolveObject(value, context) {
 // OBJECT MERGE
 // ============================================================================
 
-function mergeObjects(...objects) {
+function mergeObjects(
+    ...objects
+) {
+
     return objects.reduce(
-        (output, object) => {
+        (
+            output,
+            object
+        ) => {
+
             if (
                 !object ||
                 typeof object !== "object" ||
@@ -156,10 +288,12 @@ function mergeObjects(...objects) {
                 return output;
             }
 
+
             for (
                 const [key, value]
                 of Object.entries(object)
             ) {
+
                 if (
                     value &&
                     typeof value === "object" &&
@@ -168,17 +302,23 @@ function mergeObjects(...objects) {
                     typeof output[key] === "object" &&
                     !Array.isArray(output[key])
                 ) {
+
                     output[key] =
                         mergeObjects(
                             output[key],
                             value
                         );
+
                 } else {
-                    output[key] = value;
+
+                    output[key] =
+                        value;
                 }
             }
 
+
             return output;
+
         },
         {}
     );
@@ -186,10 +326,13 @@ function mergeObjects(...objects) {
 
 
 // ============================================================================
-// SAFE OBJECT CHECK
+// PLAIN OBJECT
 // ============================================================================
 
-function isPlainObject(value) {
+function isPlainObject(
+    value
+) {
+
     return (
         value &&
         typeof value === "object" &&
@@ -199,15 +342,21 @@ function isPlainObject(value) {
 
 
 // ============================================================================
-// RESOURCE MODEL INFORMATION
+// RESOURCE MODEL
 // ============================================================================
 
-function getModelFromResource(resourceDocument) {
+function getModelFromResource(
+    resourceDocument
+) {
+
     try {
+
         return resourceService.resolveModel(
             resourceDocument
         );
+
     } catch (error) {
+
         return null;
     }
 }
@@ -217,7 +366,10 @@ function getModelFromResource(resourceDocument) {
 // RESOURCE ID CANDIDATES
 // ============================================================================
 
-function getResourceIdCandidates(resource) {
+function getResourceIdCandidates(
+    resource
+) {
+
     if (
         !resource ||
         typeof resource !== "string"
@@ -225,16 +377,22 @@ function getResourceIdCandidates(resource) {
         return [];
     }
 
+
     const clean =
         resource.trim();
+
 
     if (!clean) {
         return [];
     }
 
+
     return [
+
         `${clean}Id`,
+
         `${clean}ID`,
+
         `${clean}_id`
     ];
 }
@@ -244,7 +402,10 @@ function getResourceIdCandidates(resource) {
 // VALUE PRESENCE
 // ============================================================================
 
-function hasValue(value) {
+function hasValue(
+    value
+) {
+
     return (
         value !== undefined &&
         value !== null &&
@@ -254,7 +415,7 @@ function hasValue(value) {
 
 
 // ============================================================================
-// EXPLICIT RECORD ID
+// RECORD ID
 // ============================================================================
 
 function resolveRecordId(
@@ -262,24 +423,32 @@ function resolveRecordId(
     context,
     resource = null
 ) {
+
     const candidates = [
+
         config?.id,
+
         config?._id
     ];
 
+
     for (
-        const candidate of candidates
+        const candidate
+        of candidates
     ) {
+
         const value =
             resolveValue(
                 candidate,
                 context
             );
 
+
         if (hasValue(value)) {
             return value;
         }
     }
+
 
     const requestId =
         getPath(
@@ -287,51 +456,62 @@ function resolveRecordId(
             "data.id"
         );
 
+
     if (hasValue(requestId)) {
         return requestId;
     }
 
+
     for (
         const key
-        of getResourceIdCandidates(resource)
+        of getResourceIdCandidates(
+            resource
+        )
     ) {
+
         const value =
             getPath(
                 context,
                 `data.${key}`
             );
 
+
         if (hasValue(value)) {
             return value;
         }
     }
+
 
     return null;
 }
 
 
 // ============================================================================
-// EXPLICIT FILTER
+// FILTER
 // ============================================================================
 
 function resolveFilter(
     config,
     context
 ) {
+
     const filter =
         resolveObject(
             config?.filter || {},
             context
         );
 
-    return isPlainObject(filter)
+
+    return isPlainObject(
+        filter
+    )
         ? filter
         : {};
 }
 
 
 // ============================================================================
-// GENERIC SCHEMA FILTER INFERENCE
+// SCHEMA FILTER INFERENCE
 // ============================================================================
 
 function inferFilterFromData({
@@ -339,35 +519,46 @@ function inferFilterFromData({
     data = {},
     projectId
 }) {
-    if (!isPlainObject(data)) {
+
+    if (
+        !isPlainObject(data)
+    ) {
         return {};
     }
+
 
     const resolvedModel =
         getModelFromResource(
             resourceDocument
         );
 
+
     if (!resolvedModel) {
         return {};
     }
 
+
     const Model =
         resolvedModel.Model;
+
 
     if (!Model?.schema) {
         return {};
     }
 
+
     const filter = {};
+
 
     const schemaPaths =
         Model.schema.paths || {};
+
 
     for (
         const fieldName
         of Object.keys(schemaPaths)
     ) {
+
         if (
             fieldName === "_id" ||
             fieldName === "__v"
@@ -375,20 +566,26 @@ function inferFilterFromData({
             continue;
         }
 
+
         if (
             Object.prototype.hasOwnProperty.call(
                 data,
                 fieldName
             )
         ) {
+
             const value =
                 data[fieldName];
 
+
             if (hasValue(value)) {
-                filter[fieldName] = value;
+
+                filter[fieldName] =
+                    value;
             }
         }
     }
+
 
     if (
         Object.prototype.hasOwnProperty.call(
@@ -399,12 +596,13 @@ function inferFilterFromData({
         delete filter.project;
     }
 
+
     return filter;
 }
 
 
 // ============================================================================
-// TARGET RESOLUTION
+// TARGET
 // ============================================================================
 
 function resolveTarget({
@@ -414,6 +612,7 @@ function resolveTarget({
     context,
     projectId
 }) {
+
     const id =
         resolveRecordId(
             config,
@@ -421,13 +620,19 @@ function resolveTarget({
             resource
         );
 
+
     if (hasValue(id)) {
+
         return {
+
             id,
+
             filter: {},
+
             source: "id"
         };
     }
+
 
     const explicitFilter =
         resolveFilter(
@@ -435,59 +640,73 @@ function resolveTarget({
             context
         );
 
+
     if (
-        Object.keys(explicitFilter).length > 0
+        Object.keys(
+            explicitFilter
+        ).length > 0
     ) {
+
         return {
+
             id: null,
-            filter: explicitFilter,
-            source: "config.filter"
+
+            filter:
+                explicitFilter,
+
+            source:
+                "config.filter"
         };
     }
+
 
     const inferredFilter =
         inferFilterFromData({
             resourceDocument,
+
             data:
                 context?.data || {},
+
             projectId
         });
 
+
     if (
-        Object.keys(inferredFilter).length > 0
+        Object.keys(
+            inferredFilter
+        ).length > 0
     ) {
+
         return {
+
             id: null,
-            filter: inferredFilter,
-            source: "schema.inference"
+
+            filter:
+                inferredFilter,
+
+            source:
+                "schema.inference"
         };
     }
 
+
     return {
+
         id: null,
+
         filter: {},
+
         source: "none"
     };
 }
 
 
 // ============================================================================
-// HANDLER AVAILABILITY
-// ============================================================================
-//
-// Handlers are discovered dynamically.
-//
-// There is deliberately NO list of action names here.
-//
-// Example:
-//
-// handlers/withdrawal/approve.js
-//     name: "withdrawal.approve"
-//
-// automatically becomes available through the handler registry.
+// HANDLER LOADING
 // ============================================================================
 
 function ensureHandlersLoaded() {
+
     if (
         !handlerRegistry ||
         handlerRegistry.size === 0
@@ -497,12 +716,21 @@ function ensureHandlersLoaded() {
 }
 
 
-function hasRegisteredHandler(name) {
+// ============================================================================
+// HANDLER CHECK
+// ============================================================================
+
+function hasRegisteredHandler(
+    name
+) {
+
     if (!name) {
         return false;
     }
 
+
     ensureHandlersLoaded();
+
 
     return handlerRegistry.has(
         name
@@ -518,39 +746,64 @@ async function executeRegisteredHandler({
     name,
     context = {}
 }) {
+
     if (!name) {
+
         throw new Error(
             "Handler name is required"
         );
     }
 
+
     ensureHandlersLoaded();
+
 
     if (
         !handlerRegistry.has(name)
     ) {
+
         throw new Error(
             `Handler '${name}' is not registered`
         );
     }
 
-    return executeHandler(
-        name,
-        context
-    );
+
+    const result =
+        await executeHandler(
+            name,
+            context
+        );
+
+
+    if (
+        result === undefined ||
+        result === null
+    ) {
+
+        throw new Error(
+            `Handler '${name}' returned no result`
+        );
+    }
+
+
+    if (
+        typeof result === "object" &&
+        result.success === false
+    ) {
+
+        throw new Error(
+            result.message ||
+            `Handler '${name}' failed`
+        );
+    }
+
+
+    return result;
 }
 
 
 // ============================================================================
-// RESOURCE OPERATION DEFINITION
-// ============================================================================
-//
-// Returns null when the resource or operation is not configured.
-//
-// This is important because a missing Resource operation may legitimately
-// mean that the Action is implemented by a registered handler.
-//
-// We therefore do NOT immediately throw here.
+// RESOURCE OPERATION RESOLUTION
 // ============================================================================
 
 async function resolveOperation({
@@ -560,27 +813,33 @@ async function resolveOperation({
     config = {},
     context = {}
 }) {
+
     const resourceDocument =
         await resourceService.getResource({
             projectId,
             resource
         });
 
+
     if (!resourceDocument) {
         return null;
     }
+
 
     const operations =
         resourceDocument
             ?.settings
             ?.operations || {};
 
+
     const definition =
         operations[operation];
+
 
     if (!definition) {
         return null;
     }
+
 
     const resolvedDefinition =
         resolveObject(
@@ -588,13 +847,16 @@ async function resolveOperation({
             context
         );
 
+
     const resolvedConfig =
         resolveObject(
             config,
             context
         );
 
+
     return {
+
         resourceDocument,
 
         operation:
@@ -611,7 +873,7 @@ async function resolveOperation({
 
 
 // ============================================================================
-// PING / HEALTH
+// PING
 // ============================================================================
 
 function executePing({
@@ -620,7 +882,9 @@ function executePing({
     resolved,
     operation = "ping"
 }) {
+
     return {
+
         success: true,
 
         operation,
@@ -650,7 +914,7 @@ function executePing({
 
 
 // ============================================================================
-// UNIVERSAL RESOURCE ACTION
+// RESOURCE ACTION
 // ============================================================================
 
 async function executeResourceAction(
@@ -659,54 +923,57 @@ async function executeResourceAction(
     config = {},
     context = {}
 ) {
+
     const projectId =
         context.projectId;
 
+
     if (!projectId) {
+
         throw new Error(
             "Project ID is required"
         );
     }
 
+
     if (!resource) {
+
         throw new Error(
             "Resource is required"
         );
     }
 
+
     if (!operation) {
+
         throw new Error(
             "Operation is required"
         );
     }
 
+
     const requestedOperation =
         String(operation);
 
-    // ------------------------------------------------------------
-    // Resolve the configured Resource operation.
-    // ------------------------------------------------------------
 
     const resolved =
         await resolveOperation({
+
             projectId,
+
             resource,
+
             operation:
                 requestedOperation,
+
             config,
+
             context
         });
 
-    // ------------------------------------------------------------
-    // IMPORTANT:
-    //
-    // A resource operation that does not exist is NOT automatically
-    // an error.
-    //
-    // The caller may be using a registered handler.
-    // ------------------------------------------------------------
 
     if (!resolved) {
+
         const actionName =
             context?.actionName ||
             context?.action?.name ||
@@ -714,26 +981,37 @@ async function executeResourceAction(
             context?.action?.key ||
             null;
 
+
         if (
             actionName &&
-            hasRegisteredHandler(actionName)
+            hasRegisteredHandler(
+                actionName
+            )
         ) {
+
             return executeRegisteredHandler({
-                name: actionName,
+
+                name:
+                    actionName,
+
                 context
             });
         }
+
 
         throw new Error(
             `Operation '${requestedOperation}' is not configured for resource '${resource}'`
         );
     }
 
+
     const actualOperation =
         resolved.operation;
 
+
     const actualConfig =
         resolved.config;
+
 
     // ------------------------------------------------------------
     // PING / HEALTH
@@ -743,14 +1021,20 @@ async function executeResourceAction(
         requestedOperation === "ping" ||
         requestedOperation === "health"
     ) {
+
         return executePing({
+
             projectId,
+
             resource,
+
             resolved,
+
             operation:
                 requestedOperation
         });
     }
+
 
     // ------------------------------------------------------------
     // TARGET
@@ -758,6 +1042,7 @@ async function executeResourceAction(
 
     const target =
         resolveTarget({
+
             resourceDocument:
                 resolved.resourceDocument,
 
@@ -771,156 +1056,212 @@ async function executeResourceAction(
             projectId
         });
 
+
     const id =
         target.id;
+
 
     const filter =
         target.filter;
 
+
     // ------------------------------------------------------------
-    // CREATE
+    // OPERATION
     // ------------------------------------------------------------
+
+    let result;
+
 
     switch (actualOperation) {
 
+        // ========================================================
+        // CREATE
+        // ========================================================
+
         case "create":
 
-            return resourceService.create({
-                projectId,
-                resource,
+            result =
+                await resourceService.create({
 
-                data:
-                    actualConfig.data !==
-                    undefined
-                        ? actualConfig.data
-                        : context.data || {},
+                    projectId,
 
-                metadata:
-                    actualConfig.metadata ||
-                    {}
-            });
+                    resource,
+
+                    data:
+                        actualConfig.data !==
+                        undefined
+                            ? actualConfig.data
+                            : context.data || {},
+
+                    metadata:
+                        actualConfig.metadata ||
+                        {}
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // FIND
-        // --------------------------------------------------------
+        // ========================================================
 
         case "find":
         case "list":
 
-            return resourceService.find({
-                projectId,
-                resource,
-                filter,
+            result =
+                await resourceService.find({
 
-                options:
-                    actualConfig.options ||
-                    {}
-            });
+                    projectId,
+
+                    resource,
+
+                    filter,
+
+                    options:
+                        actualConfig.options ||
+                        {}
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // FIND ONE
-        // --------------------------------------------------------
+        // ========================================================
 
         case "findOne":
         case "get":
         case "view":
 
-            return resourceService.findOne({
-                projectId,
-                resource,
-                id,
-                filter,
+            result =
+                await resourceService.findOne({
 
-                allowEmptyFilter:
-                    actualConfig.allowEmptyFilter === true,
+                    projectId,
 
-                options:
-                    actualConfig.options ||
-                    {}
-            });
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    allowEmptyFilter:
+                        actualConfig.allowEmptyFilter === true,
+
+                    options:
+                        actualConfig.options ||
+                        {}
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // UPDATE
-        // --------------------------------------------------------
+        // ========================================================
 
         case "update":
 
-            return resourceService.update({
-                projectId,
-                resource,
-                id,
-                filter,
+            result =
+                await resourceService.update({
 
-                data:
-                    actualConfig.data ||
-                    {},
+                    projectId,
 
-                replace:
-                    actualConfig.replace === true
-            });
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    data:
+                        actualConfig.data ||
+                        {},
+
+                    replace:
+                        actualConfig.replace === true
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // DELETE
-        // --------------------------------------------------------
+        // ========================================================
 
         case "delete":
         case "remove":
 
-            return resourceService.remove({
-                projectId,
-                resource,
-                id,
-                filter
-            });
+            result =
+                await resourceService.remove({
+
+                    projectId,
+
+                    resource,
+
+                    id,
+
+                    filter
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // INCREMENT
-        // --------------------------------------------------------
+        // ========================================================
 
         case "increment":
 
-            return resourceService.increment({
-                projectId,
-                resource,
-                id,
-                filter,
+            result =
+                await resourceService.increment({
 
-                field:
-                    actualConfig.field,
+                    projectId,
 
-                amount:
-                    actualConfig.amount
-            });
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    field:
+                        actualConfig.field,
+
+                    amount:
+                        actualConfig.amount
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // DECREMENT
-        // --------------------------------------------------------
+        // ========================================================
 
         case "decrement":
 
-            return resourceService.decrement({
-                projectId,
-                resource,
-                id,
-                filter,
+            result =
+                await resourceService.decrement({
 
-                field:
-                    actualConfig.field,
+                    projectId,
 
-                amount:
-                    actualConfig.amount
-            });
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    field:
+                        actualConfig.field,
+
+                    amount:
+                        actualConfig.amount
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // ADJUST
-        // --------------------------------------------------------
+        // ========================================================
 
         case "adjust": {
 
@@ -932,51 +1273,68 @@ async function executeResourceAction(
                     )
                 );
 
+
             if (
                 !Number.isFinite(amount)
             ) {
+
                 throw new Error(
                     "Invalid adjustment amount"
                 );
             }
 
-            return resourceService.atomicAdjust({
-                projectId,
-                resource,
-                id,
-                filter,
 
-                field:
-                    actualConfig.field,
+            result =
+                await resourceService.atomicAdjust({
 
-                amount
-            });
+                    projectId,
+
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    field:
+                        actualConfig.field,
+
+                    amount
+                });
+
+            break;
         }
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // SET
-        // --------------------------------------------------------
+        // ========================================================
 
         case "set":
 
-            return resourceService.update({
-                projectId,
-                resource,
-                id,
-                filter,
+            result =
+                await resourceService.update({
 
-                data:
-                    actualConfig.data ||
-                    {},
+                    projectId,
 
-                replace: false
-            });
+                    resource,
+
+                    id,
+
+                    filter,
+
+                    data:
+                        actualConfig.data ||
+                        {},
+
+                    replace: false
+                });
+
+            break;
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // CREATE MANY
-        // --------------------------------------------------------
+        // ========================================================
 
         case "createMany": {
 
@@ -987,14 +1345,20 @@ async function executeResourceAction(
                     ? actualConfig.data
                     : [];
 
+
             const results = [];
 
+
             for (
-                const record of records
+                const record
+                of records
             ) {
-                results.push(
+
+                const created =
                     await resourceService.create({
+
                         projectId,
+
                         resource,
 
                         data:
@@ -1003,43 +1367,81 @@ async function executeResourceAction(
                         metadata:
                             actualConfig.metadata ||
                             {}
-                    })
+                    });
+
+
+                if (
+                    !created ||
+                    created.success === false
+                ) {
+
+                    throw new Error(
+                        created?.message ||
+                        "createMany operation failed"
+                    );
+                }
+
+
+                results.push(
+                    created
                 );
             }
 
-            return {
+
+            result = {
+
                 success: true,
-                data: results
+
+                data:
+                    results
             };
+
+            break;
         }
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // UPDATE MANY
-        // --------------------------------------------------------
+        // ========================================================
 
         case "updateMany": {
 
             const records =
                 await resourceService.find({
+
                     projectId,
+
                     resource,
+
                     filter
                 });
 
-            if (!records.success) {
-                return records;
+
+            if (
+                !records ||
+                records.success === false
+            ) {
+
+                throw new Error(
+                    records?.message ||
+                    "updateMany lookup failed"
+                );
             }
 
+
             const results = [];
+
 
             for (
                 const record
                 of records.data || []
             ) {
-                results.push(
+
+                const updated =
                     await resourceService.update({
+
                         projectId,
+
                         resource,
 
                         id:
@@ -1050,61 +1452,121 @@ async function executeResourceAction(
                             {},
 
                         replace: false
-                    })
+                    });
+
+
+                if (
+                    !updated ||
+                    updated.success === false
+                ) {
+
+                    throw new Error(
+                        updated?.message ||
+                        "updateMany operation failed"
+                    );
+                }
+
+
+                results.push(
+                    updated
                 );
             }
 
-            return {
+
+            result = {
+
                 success: true,
-                data: results
+
+                data:
+                    results
             };
+
+            break;
         }
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // DELETE MANY
-        // --------------------------------------------------------
+        // ========================================================
 
         case "deleteMany": {
 
             const records =
                 await resourceService.find({
+
                     projectId,
+
                     resource,
+
                     filter
                 });
 
-            if (!records.success) {
-                return records;
+
+            if (
+                !records ||
+                records.success === false
+            ) {
+
+                throw new Error(
+                    records?.message ||
+                    "deleteMany lookup failed"
+                );
             }
 
+
             const results = [];
+
 
             for (
                 const record
                 of records.data || []
             ) {
-                results.push(
+
+                const removed =
                     await resourceService.remove({
+
                         projectId,
+
                         resource,
 
                         id:
                             record._id
-                    })
+                    });
+
+
+                if (
+                    !removed ||
+                    removed.success === false
+                ) {
+
+                    throw new Error(
+                        removed?.message ||
+                        "deleteMany operation failed"
+                    );
+                }
+
+
+                results.push(
+                    removed
                 );
             }
 
-            return {
+
+            result = {
+
                 success: true,
-                data: results
+
+                data:
+                    results
             };
+
+            break;
         }
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // FANOUT
-        // --------------------------------------------------------
+        // ========================================================
 
         case "fanout": {
 
@@ -1115,17 +1577,21 @@ async function executeResourceAction(
                     ? actualConfig.targets
                     : [];
 
+
             const results = [];
+
 
             for (
                 const target
                 of targets
             ) {
+
                 const targetResource =
                     resolveValue(
                         target.resource,
                         context
                     );
+
 
                 const targetOperation =
                     resolveValue(
@@ -1133,13 +1599,41 @@ async function executeResourceAction(
                         context
                     );
 
+
                 const targetConfig =
                     resolveObject(
                         target.config || {},
                         context
                     );
 
+
+                const targetResult =
+                    await executeResourceAction(
+
+                        targetResource,
+
+                        targetOperation,
+
+                        targetConfig,
+
+                        context
+                    );
+
+
+                if (
+                    !targetResult ||
+                    targetResult.success === false
+                ) {
+
+                    throw new Error(
+                        targetResult?.message ||
+                        `Fanout operation '${targetOperation}' failed`
+                    );
+                }
+
+
                 results.push({
+
                     resource:
                         targetResource,
 
@@ -1147,25 +1641,26 @@ async function executeResourceAction(
                         targetOperation,
 
                     result:
-                        await executeResourceAction(
-                            targetResource,
-                            targetOperation,
-                            targetConfig,
-                            context
-                        )
+                        targetResult
                 });
             }
 
-            return {
+
+            result = {
+
                 success: true,
-                data: results
+
+                data:
+                    results
             };
+
+            break;
         }
 
 
-        // --------------------------------------------------------
+        // ========================================================
         // UNSUPPORTED
-        // --------------------------------------------------------
+        // ========================================================
 
         default:
 
@@ -1173,6 +1668,47 @@ async function executeResourceAction(
                 `Unsupported resource operation '${actualOperation}'`
             );
     }
+
+
+    // ============================================================
+    // CRITICAL SUCCESS VALIDATION
+    // ============================================================
+    //
+    // ResourceService methods return:
+    //
+    //   { success: true, ... }
+    //
+    // OR
+    //
+    //   { success: false, ... }
+    //
+    // A false result MUST NEVER reach the HTTP success response.
+    // ============================================================
+
+    if (
+        result === undefined ||
+        result === null
+    ) {
+
+        throw new Error(
+            `Operation '${actualOperation}' returned no result`
+        );
+    }
+
+
+    if (
+        typeof result === "object" &&
+        result.success === false
+    ) {
+
+        throw new Error(
+            result.message ||
+            `Operation '${actualOperation}' failed`
+        );
+    }
+
+
+    return result;
 }
 
 
@@ -1181,24 +1717,35 @@ async function executeResourceAction(
 // ============================================================================
 
 async function executeUniversalAction({
+
     actionRecord,
+
     projectId,
+
     actorId = null,
+
     userId = null,
+
     data = {},
+
     req = null
 }) {
+
     if (!actionRecord) {
+
         throw new Error(
             "Action record is required"
         );
     }
 
+
     if (!projectId) {
+
         throw new Error(
             "Project ID is required"
         );
     }
+
 
     const actionName =
         actionRecord.name ||
@@ -1206,11 +1753,17 @@ async function executeUniversalAction({
         actionRecord.key ||
         null;
 
+
     const runtimeContext = {
+
         projectId,
+
         actorId,
+
         userId,
+
         data,
+
         req,
 
         action:
@@ -1219,43 +1772,50 @@ async function executeUniversalAction({
         actionName
     };
 
-    // ========================================================================
-    // MULTI-STEP ACTION
-    // ========================================================================
 
-    if (
+    // ============================================================
+    // MULTI-STEP ACTION
+    // ============================================================
+
+    const steps =
         Array.isArray(
             actionRecord.steps
-        ) ||
-        Array.isArray(
-            actionRecord.config?.steps
         )
-    ) {
-        const steps =
-            Array.isArray(
-                actionRecord.steps
-            )
-                ? actionRecord.steps
-                : actionRecord.config.steps;
+            ? actionRecord.steps
+            : (
+                Array.isArray(
+                    actionRecord.config?.steps
+                )
+                    ? actionRecord.config.steps
+                    : null
+            );
+
+
+    if (steps) {
 
         const results = [];
+
 
         for (
             let index = 0;
             index < steps.length;
             index++
         ) {
+
             const step =
                 steps[index];
+
 
             if (
                 !step ||
                 typeof step !== "object"
             ) {
+
                 throw new Error(
                     `Invalid action step at index ${index}`
                 );
             }
+
 
             const stepResource =
                 resolveValue(
@@ -1263,11 +1823,13 @@ async function executeUniversalAction({
                     runtimeContext
                 );
 
+
             const stepOperation =
                 resolveValue(
                     step.operation,
                     runtimeContext
                 );
+
 
             const stepConfig =
                 resolveObject(
@@ -1276,38 +1838,64 @@ async function executeUniversalAction({
                     runtimeContext
                 );
 
+
             if (!stepResource) {
+
                 throw new Error(
                     `Action step ${index} requires a resource`
                 );
             }
 
+
             if (!stepOperation) {
+
                 throw new Error(
                     `Action step ${index} requires an operation`
                 );
             }
 
-            const result =
+
+            const stepResult =
                 await executeResourceAction(
+
                     stepResource,
+
                     stepOperation,
+
                     stepConfig,
+
                     runtimeContext
                 );
 
+
+            if (
+                !stepResult ||
+                stepResult.success === false
+            ) {
+
+                throw new Error(
+                    stepResult?.message ||
+                    `Action step ${index} failed`
+                );
+            }
+
+
             results.push({
+
                 resource:
                     stepResource,
 
                 operation:
                     stepOperation,
 
-                result
+                result:
+                    stepResult
             });
         }
 
+
         return {
+
             success: true,
 
             action:
@@ -1318,9 +1906,9 @@ async function executeUniversalAction({
     }
 
 
-    // ========================================================================
-    // NORMAL ACTION CONFIGURATION
-    // ========================================================================
+    // ============================================================
+    // CONFIGURATION
+    // ============================================================
 
     const config =
         actionRecord.config &&
@@ -1329,23 +1917,9 @@ async function executeUniversalAction({
             : actionRecord;
 
 
-    // ========================================================================
-    // EXPLICIT HANDLER CONFIGURATION
-    // ========================================================================
-    //
-    // If an action explicitly names a handler, that handler is authoritative.
-    //
-    // Example:
-    //
-    // {
-    //   "name": "some.action",
-    //   "config": {
-    //      "handler": "some.action"
-    //   }
-    // }
-    //
-    // No action-specific engine logic is required.
-    // ========================================================================
+    // ============================================================
+    // EXPLICIT HANDLER
+    // ============================================================
 
     const configuredHandler =
         resolveValue(
@@ -1353,31 +1927,51 @@ async function executeUniversalAction({
             runtimeContext
         );
 
+
     if (
         configuredHandler &&
         hasRegisteredHandler(
             configuredHandler
         )
     ) {
-        return executeRegisteredHandler({
-            name:
-                configuredHandler,
 
-            context:
-                runtimeContext
-        });
+        const result =
+            await executeRegisteredHandler({
+
+                name:
+                    configuredHandler,
+
+                context:
+                    runtimeContext
+            });
+
+
+        if (
+            !result ||
+            result.success === false
+        ) {
+
+            throw new Error(
+                result?.message ||
+                `Handler '${configuredHandler}' failed`
+            );
+        }
+
+
+        return result;
     }
 
 
-    // ========================================================================
-    // RESOURCE CONFIGURATION
-    // ========================================================================
+    // ============================================================
+    // RESOURCE
+    // ============================================================
 
     const resource =
         resolveValue(
             config.resource,
             runtimeContext
         );
+
 
     const operation =
         resolveValue(
@@ -1386,35 +1980,50 @@ async function executeUniversalAction({
         );
 
 
-    // ========================================================================
-    // RESOURCE ACTION
-    // ========================================================================
+    // ============================================================
+    // RESOURCE EXECUTION
+    // ============================================================
 
     if (
         resource &&
         operation
     ) {
+
         try {
-            return await executeResourceAction(
-                resource,
-                operation,
-                config,
-                runtimeContext
-            );
+
+            const result =
+                await executeResourceAction(
+
+                    resource,
+
+                    operation,
+
+                    config,
+
+                    runtimeContext
+                );
+
+
+            if (
+                !result ||
+                result.success === false
+            ) {
+
+                throw new Error(
+                    result?.message ||
+                    `Action '${actionName}' failed`
+                );
+            }
+
+
+            return result;
+
+
         } catch (error) {
 
-            // ------------------------------------------------------------
-            // HANDLER FALLBACK
-            // ------------------------------------------------------------
-            //
-            // A Resource + Operation may be present in the Action config
-            // even when that operation is not configured on the Resource.
-            //
-            // If a registered handler exists for the Action itself, use
-            // that handler.
-            //
-            // This is generic. There is no withdrawal-specific logic.
-            // ------------------------------------------------------------
+            // ----------------------------------------------------
+            // GENERIC HANDLER FALLBACK
+            // ----------------------------------------------------
 
             if (
                 actionName &&
@@ -1422,30 +2031,42 @@ async function executeUniversalAction({
                     actionName
                 )
             ) {
-                return executeRegisteredHandler({
-                    name:
-                        actionName,
 
-                    context:
-                        runtimeContext
-                });
+                const result =
+                    await executeRegisteredHandler({
+
+                        name:
+                            actionName,
+
+                        context:
+                            runtimeContext
+                    });
+
+
+                if (
+                    !result ||
+                    result.success === false
+                ) {
+
+                    throw new Error(
+                        result?.message ||
+                        `Action '${actionName}' failed`
+                    );
+                }
+
+
+                return result;
             }
+
 
             throw error;
         }
     }
 
 
-    // ========================================================================
-    // IMPLICIT REGISTERED HANDLER
-    // ========================================================================
-    //
-    // Backward compatibility:
-    //
-    // An Action can simply have a name matching a registered handler.
-    //
-    // No config.handler field is required.
-    // ========================================================================
+    // ============================================================
+    // IMPLICIT HANDLER
+    // ============================================================
 
     if (
         actionName &&
@@ -1453,31 +2074,53 @@ async function executeUniversalAction({
             actionName
         )
     ) {
-        return executeRegisteredHandler({
-            name:
-                actionName,
 
-            context:
-                runtimeContext
-        });
+        const result =
+            await executeRegisteredHandler({
+
+                name:
+                    actionName,
+
+                context:
+                    runtimeContext
+            });
+
+
+        if (
+            !result ||
+            result.success === false
+        ) {
+
+            throw new Error(
+                result?.message ||
+                `Action '${actionName}' failed`
+            );
+        }
+
+
+        return result;
     }
 
 
-    // ========================================================================
-    // INVALID ACTION CONFIGURATION
-    // ========================================================================
+    // ============================================================
+    // INVALID CONFIGURATION
+    // ============================================================
 
     if (!resource) {
+
         throw new Error(
             `Action '${actionName || "unknown"}' requires a resource or registered handler`
         );
     }
 
+
     if (!operation) {
+
         throw new Error(
             `Action '${actionName || "unknown"}' requires an operation or registered handler`
         );
     }
+
 
     throw new Error(
         `Action '${actionName || "unknown"}' has no executable configuration`
@@ -1490,6 +2133,7 @@ async function executeUniversalAction({
 // ============================================================================
 
 module.exports = {
+
     executeUniversalAction,
 
     executeResourceAction,
@@ -1498,21 +2142,5 @@ module.exports = {
 
     resolveValue,
 
-    resolveObject,
-
-    resolveRecordId,
-
-    resolveFilter,
-
-    resolveTarget,
-
-    inferFilterFromData,
-
-    getPath,
-
-    mergeObjects,
-
-    hasRegisteredHandler,
-
-    executeRegisteredHandler
+    sanitizeActionResult
 };
