@@ -2,67 +2,56 @@ const express = require("express");
 
 const router = express.Router();
 
-const project = require("../middleware/project");
 const protect = require("../middleware/auth");
 const admin = require("../middleware/admin");
 
 const Action = require("../models/Action");
-
-const resourceService =
-    require("../services/resourceService");
+const resourceService = require("../services/resourceService");
+const {
+    executeUniversalAction
+} = require("../services/universalActionEngine");
 
 
 // ============================================================
 // HELPERS
 // ============================================================
 
-function isPlainObject(value) {
-
-    return (
-        value &&
-        typeof value === "object" &&
-        !Array.isArray(value)
-    );
-
-}
-
-
 function validateActionName(name) {
-
     if (
         typeof name !== "string" ||
         !name.trim()
     ) {
-
         return {
             valid: false,
             message: "Action name is required"
         };
-
     }
 
-    const normalized =
-        name.trim();
+    const normalized = name.trim();
 
     if (
-        !/^[a-zA-Z0-9_.-]+$/.test(
-            normalized
-        )
+        !/^[a-zA-Z0-9_.-]+$/.test(normalized)
     ) {
-
         return {
             valid: false,
             message:
                 "Action name may only contain letters, numbers, dots, hyphens and underscores"
         };
-
     }
 
     return {
         valid: true,
         name: normalized
     };
+}
 
+
+function isPlainObject(value) {
+    return (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+    );
 }
 
 
@@ -70,14 +59,14 @@ function validateActionName(name) {
 // RESOLVE RESOURCE OPERATION
 // ============================================================
 //
-// Single source of truth for Action validation.
+// Action configuration:
+// {
+//     resource: "user",
+//     operation: "update"
+// }
 //
-// Actions reference:
-//   resource + operation
-//
-// Resource configuration determines what actually executes.
-//
-// This keeps the Action system completely dynamic.
+// Resource configuration is the source of truth for whether
+// the operation is actually available.
 // ============================================================
 
 async function resolveConfiguredOperation(
@@ -85,6 +74,7 @@ async function resolveConfiguredOperation(
     resourceName,
     operationName
 ) {
+
     if (
         typeof resourceName !== "string" ||
         !resourceName.trim()
@@ -105,64 +95,106 @@ async function resolveConfiguredOperation(
         };
     }
 
-    const resource =
-        await resourceService.getResource({
-            projectId,
-            resource: resourceName.trim()
-        });
+    const normalizedResource =
+        resourceName.trim();
 
-    if (!resource) {
-        return {
-            valid: false,
-            message:
-                `Resource '${resourceName}' not found`
-        };
-    }
+    const normalizedOperation =
+        operationName.trim();
 
-    /*
-     * Global special operations.
-     *
-     * These are handled by the universal engine itself
-     * and therefore do not require a database operation
-     * definition.
-     */
+
+    // --------------------------------------------------------
+    // ENGINE-LEVEL SPECIAL OPERATION
+    // --------------------------------------------------------
+
     if (
-        resourceName.trim() === "system" &&
-        operationName.trim() === "ping"
+        normalizedResource === "system" &&
+        normalizedOperation === "ping"
     ) {
         return {
             valid: true,
-            resource,
-            operation: operationName.trim(),
+            resource: null,
+            operation: normalizedOperation,
             actualOperation: "ping",
             special: true
         };
     }
 
+
+    const resource =
+        await resourceService.getResource({
+            projectId,
+            resource: normalizedResource
+        });
+
+
+    if (!resource) {
+        return {
+            valid: false,
+            message:
+                `Resource '${normalizedResource}' not found`
+        };
+    }
+
+
+    if (resource.enabled === false) {
+        return {
+            valid: false,
+            message:
+                `Resource '${normalizedResource}' is disabled`
+        };
+    }
+
+
     const operations =
         resource.settings?.operations || {};
 
     const definition =
-        operations[operationName.trim()];
+        operations[normalizedOperation];
+
 
     if (definition === false) {
         return {
             valid: false,
             message:
-                `Operation '${operationName}' is disabled for resource '${resourceName}'`
+                `Operation '${normalizedOperation}' is disabled for resource '${normalizedResource}'`
         };
     }
 
+
+    if (definition === true) {
+        return {
+            valid: true,
+            resource,
+            operation: normalizedOperation,
+            actualOperation: normalizedOperation,
+            definition: true
+        };
+    }
+
+
     if (
-        !definition ||
-        typeof definition !== "object"
+        definition === undefined ||
+        definition === null
     ) {
         return {
             valid: false,
             message:
-                `Operation '${operationName}' is not configured for resource '${resourceName}'`
+                `Operation '${normalizedOperation}' is not configured for resource '${normalizedResource}'`
         };
     }
+
+
+    if (
+        typeof definition !== "object" ||
+        Array.isArray(definition)
+    ) {
+        return {
+            valid: false,
+            message:
+                `Operation '${normalizedOperation}' is configured incorrectly`
+        };
+    }
+
 
     if (
         typeof definition.operation !== "string" ||
@@ -171,14 +203,15 @@ async function resolveConfiguredOperation(
         return {
             valid: false,
             message:
-                `Operation '${operationName}' is configured incorrectly`
+                `Operation '${normalizedOperation}' is configured incorrectly`
         };
     }
+
 
     return {
         valid: true,
         resource,
-        operation: operationName.trim(),
+        operation: normalizedOperation,
         actualOperation:
             definition.operation.trim(),
         definition
@@ -187,744 +220,798 @@ async function resolveConfiguredOperation(
 
 
 // ============================================================
-// VALIDATE ONE ACTION STEP
+// BUILD ACTION DATA
 // ============================================================
 
-async function validateActionStep(
-    projectId,
-    step,
-    index
-) {
-    if (!isPlainObject(step)) {
-        return {
-            valid: false,
-            message:
-                `Action step ${index + 1} must be an object`
-        };
+function buildActionPayload(body = {}) {
+
+    const payload = {};
+
+    if (body.name !== undefined) {
+        payload.name = body.name;
     }
 
-    const result =
-        await resolveConfiguredOperation(
-            projectId,
-            step.resource,
-            step.operation
-        );
-
-    if (!result.valid) {
-        return {
-            valid: false,
-            message:
-                `Action step ${index + 1}: ${result.message}`
-        };
+    if (body.description !== undefined) {
+        payload.description = body.description;
     }
 
-    return {
-        valid: true,
-        operation: result
-    };
-}
-
-
-// ============================================================
-// VALIDATE ACTION CONFIGURATION
-// ============================================================
-
-async function validateActionConfig(
-    projectId,
-    config
-) {
-    if (!isPlainObject(config)) {
-        return {
-            valid: false,
-            message:
-                "Action config must be an object"
-        };
+    if (body.enabled !== undefined) {
+        payload.enabled = body.enabled !== false;
     }
 
-
-    // ========================================================
-    // COMPOSED ACTION
-    // ========================================================
-
-    if (config.steps !== undefined) {
-        if (
-            !Array.isArray(config.steps) ||
-            config.steps.length === 0
-        ) {
-            return {
-                valid: false,
-                message:
-                    "Action steps must be a non-empty array"
-            };
-        }
-
-        for (
-            let i = 0;
-            i < config.steps.length;
-            i++
-        ) {
-            const result =
-                await validateActionStep(
-                    projectId,
-                    config.steps[i],
-                    i
-                );
-
-            if (!result.valid) {
-                return result;
-            }
-        }
-
-        return {
-            valid: true
-        };
+    if (body.type !== undefined) {
+        payload.type = body.type;
     }
-
-
-    // ========================================================
-    // HANDLER ACTION
-    // ========================================================
-    //
-    // Keep compatibility with the existing handler system.
-    // No handler is required for universal actions.
-    //
 
     if (
-        config.resource === undefined &&
-        config.operation === undefined
+        body.config !== undefined
     ) {
-        if (
-            config.handler !== undefined
-        ) {
-            if (
-                typeof config.handler !== "string" ||
-                !config.handler.trim()
-            ) {
-                return {
-                    valid: false,
-                    message:
-                        "Action handler must be a non-empty string"
-                };
-            }
-        }
-
-        return {
-            valid: true
-        };
+        payload.config = body.config;
     }
 
-
-    // ========================================================
-    // NORMAL UNIVERSAL ACTION
-    // ========================================================
-
-    const result =
-        await resolveConfiguredOperation(
-            projectId,
-            config.resource,
-            config.operation
-        );
-
-    if (!result.valid) {
-        return result;
-    }
-
-    return {
-        valid: true,
-        operation: result
-    };
+    return payload;
 }
 
 
 // ============================================================
-// CREATE ACTION
+// AUTHORIZATION
+// ============================================================
+//
+// The server already applies project + apiUsage middleware.
+// This route additionally protects action-management operations
+// with the existing authentication/admin middleware.
 // ============================================================
 
-router.post(
-    "/",
-    project,
-    protect,
-    admin,
-
-    async (req, res) => {
-
-        try {
-
-            const nameValidation =
-                validateActionName(
-                    req.body?.name
-                );
+router.use(protect);
+router.use(admin);
 
 
-            if (!nameValidation.valid) {
+// ============================================================
+// LIST ACTIONS
+// ============================================================
+//
+// GET /api/v1/actions
+// ============================================================
 
-                return res.status(400).json({
+router.get("/", async (req, res) => {
 
-                    success: false,
+    try {
 
-                    message:
-                        nameValidation.message
-
-                });
-
-            }
-
-
-            const name =
-                nameValidation.name;
-
-
-            /*
-             * Prevent duplicate action names
-             * inside the same project.
-             */
-
-            const existing =
-                await Action.findOne({
-
-                    project:
-                        req.project._id,
-
-                    name
-
-                });
-
-
-            if (existing) {
-
-                return res.status(409).json({
-
-                    success: false,
-
-                    message:
-                        `Action '${name}' already exists`
-
-                });
-
-            }
-
-
-            const config =
-                req.body?.config || {};
-
-
-            const validation =
-                await validateActionConfig(
-
-                    req.project._id,
-
-                    config
-
-                );
-
-
-            if (!validation.valid) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        validation.message
-
-                });
-
-            }
-
-
-            const action =
-                await Action.create({
-
-                    project:
-                        req.project._id,
-
-                    name,
-
-                    description:
-                        typeof req.body?.description === "string"
-                            ? req.body.description
-                            : "",
-
-                    enabled:
-                        req.body?.enabled === undefined
-                            ? true
-                            : Boolean(
-                                req.body.enabled
-                            ),
-
-                    config
-
-                });
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Action created",
-
-                data:
-                    action
-
+        const actions =
+            await Action.find({
+                project: req.project._id
+            })
+            .sort({
+                createdAt: -1
             });
 
-        } catch (error) {
 
-            console.error(
-                "CREATE ACTION ERROR:",
-                error
-            );
+        return res.json({
+            success: true,
+            data: actions
+        });
 
+    } catch (error) {
 
-            return res.status(500).json({
+        console.error(
+            "[ACTIONS LIST ERROR]",
+            error
+        );
 
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-);
-
-
-// ============================================================
-// GET ACTIONS
-// ============================================================
-
-router.get(
-    "/",
-    project,
-    protect,
-    admin,
-
-    async (req, res) => {
-
-        try {
-
-            const actions =
-                await Action.find({
-
-                    project:
-                        req.project._id
-
-                })
-                .sort({
-                    name: 1
-                });
-
-
-            return res.json({
-
-                success: true,
-
-                data:
-                    actions
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "GET ACTIONS ERROR:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    error.message
-
-            });
-
-        }
-
-    }
-);
+});
 
 
 // ============================================================
 // GET SINGLE ACTION
 // ============================================================
+//
+// GET /api/v1/actions/:id
+// ============================================================
 
-router.get(
-    "/:id",
-    project,
-    protect,
-    admin,
+router.get("/:id", async (req, res) => {
 
-    async (req, res) => {
+    try {
 
-        try {
-
-            const action =
-                await Action.findOne({
-
-                    _id:
-                        req.params.id,
-
-                    project:
-                        req.project._id
-
-                });
-
-
-            if (!action) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Action not found"
-
-                });
-
-            }
-
-
-            return res.json({
-
-                success: true,
-
-                data:
-                    action
-
+        const action =
+            await Action.findOne({
+                _id: req.params.id,
+                project: req.project._id
             });
 
-        } catch (error) {
 
-            console.error(
-                "GET ACTION ERROR:",
-                error
+        if (!action) {
+            return res.status(404).json({
+                success: false,
+                message: "Action not found"
+            });
+        }
+
+
+        return res.json({
+            success: true,
+            data: action
+        });
+
+    } catch (error) {
+
+        console.error(
+            "[ACTION GET ERROR]",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
+// ============================================================
+// CREATE ACTION
+// ============================================================
+//
+// POST /api/v1/actions
+//
+// Example:
+//
+// {
+//   "name": "user.unsuspend",
+//   "description": "Unsuspend user",
+//   "enabled": true,
+//   "config": {
+//      "resource": "user",
+//      "operation": "update",
+//      "id": "{{data.user}}",
+//      "data": {
+//          "status": "active"
+//      }
+//   }
+// }
+// ============================================================
+
+router.post("/", async (req, res) => {
+
+    try {
+
+        const validation =
+            validateActionName(req.body.name);
+
+
+        if (!validation.valid) {
+            return res.status(400).json({
+                success: false,
+                message: validation.message
+            });
+        }
+
+
+        const config =
+            isPlainObject(req.body.config)
+                ? req.body.config
+                : {};
+
+
+        const resource =
+            config.resource;
+
+        const operation =
+            config.operation;
+
+
+        if (
+            !resource ||
+            !operation
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Action config.resource and config.operation are required"
+            });
+        }
+
+
+        const operationValidation =
+            await resolveConfiguredOperation(
+                req.project._id,
+                resource,
+                operation
             );
 
 
-            return res.status(500).json({
-
+        if (!operationValidation.valid) {
+            return res.status(400).json({
                 success: false,
-
                 message:
-                    error.message
-
+                    operationValidation.message
             });
-
         }
 
+
+        const existing =
+            await Action.findOne({
+                project: req.project._id,
+                name: validation.name
+            });
+
+
+        if (existing) {
+            return res.status(409).json({
+                success: false,
+                message: "Action already exists"
+            });
+        }
+
+
+        const payload =
+            buildActionPayload(req.body);
+
+
+        payload.project =
+            req.project._id;
+
+        payload.name =
+            validation.name;
+
+        payload.config =
+            config;
+
+
+        const action =
+            await Action.create(payload);
+
+
+        return res.status(201).json({
+            success: true,
+            message: "Action created",
+            data: action
+        });
+
+    } catch (error) {
+
+        console.error(
+            "[ACTION CREATE ERROR]",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-);
+});
 
 
 // ============================================================
 // UPDATE ACTION
 // ============================================================
+//
+// PUT /api/v1/actions/:id
+// ============================================================
 
-router.put(
-    "/:id",
-    project,
-    protect,
-    admin,
+router.put("/:id", async (req, res) => {
 
-    async (req, res) => {
+    try {
 
-        try {
-
-            const action =
-                await Action.findOne({
-
-                    _id:
-                        req.params.id,
-
-                    project:
-                        req.project._id
-
-                });
-
-
-            if (!action) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Action not found"
-
-                });
-
-            }
-
-
-            /*
-             * Validate name only when supplied.
-             */
-
-            if (
-                req.body.name !== undefined
-            ) {
-
-                const nameValidation =
-                    validateActionName(
-                        req.body.name
-                    );
-
-
-                if (
-                    !nameValidation.valid
-                ) {
-
-                    return res.status(400).json({
-
-                        success: false,
-
-                        message:
-                            nameValidation.message
-
-                    });
-
-                }
-
-
-                const newName =
-                    nameValidation.name;
-
-
-                const duplicate =
-                    await Action.findOne({
-
-                        project:
-                            req.project._id,
-
-                        name:
-                            newName,
-
-                        _id: {
-                            $ne:
-                                action._id
-                        }
-
-                    });
-
-
-                if (duplicate) {
-
-                    return res.status(409).json({
-
-                        success: false,
-
-                        message:
-                            `Action '${newName}' already exists`
-
-                    });
-
-                }
-
-
-                action.name =
-                    newName;
-
-            }
-
-
-            /*
-             * Validate config only when it is being changed.
-             */
-
-            if (
-                req.body.config !== undefined
-            ) {
-
-                const validation =
-                    await validateActionConfig(
-
-                        req.project._id,
-
-                        req.body.config
-
-                    );
-
-
-                if (!validation.valid) {
-
-                    return res.status(400).json({
-
-                        success: false,
-
-                        message:
-                            validation.message
-
-                    });
-
-                }
-
-
-                action.config =
-                    req.body.config;
-
-            }
-
-
-            if (
-                req.body.description !== undefined
-            ) {
-
-                action.description =
-                    typeof req.body.description === "string"
-                        ? req.body.description
-                        : "";
-
-            }
-
-
-            if (
-                req.body.enabled !== undefined
-            ) {
-
-                if (
-                    typeof req.body.enabled !== "boolean"
-                ) {
-
-                    return res.status(400).json({
-
-                        success: false,
-
-                        message:
-                            "Action enabled must be a boolean"
-
-                    });
-
-                }
-
-
-                action.enabled =
-                    req.body.enabled;
-
-            }
-
-
-            await action.save();
-
-
-            return res.json({
-
-                success: true,
-
-                message:
-                    "Action updated",
-
-                data:
-                    action
-
+        const action =
+            await Action.findOne({
+                _id: req.params.id,
+                project: req.project._id
             });
 
-        } catch (error) {
 
-            console.error(
-                "UPDATE ACTION ERROR:",
-                error
-            );
-
-
-            return res.status(500).json({
-
+        if (!action) {
+            return res.status(404).json({
                 success: false,
-
-                message:
-                    error.message
-
+                message: "Action not found"
             });
-
         }
 
+
+        if (
+            req.body.name !== undefined
+        ) {
+
+            const validation =
+                validateActionName(
+                    req.body.name
+                );
+
+
+            if (!validation.valid) {
+                return res.status(400).json({
+                    success: false,
+                    message: validation.message
+                });
+            }
+
+
+            const duplicate =
+                await Action.findOne({
+                    project: req.project._id,
+                    name: validation.name,
+                    _id: {
+                        $ne: action._id
+                    }
+                });
+
+
+            if (duplicate) {
+                return res.status(409).json({
+                    success: false,
+                    message: "Action already exists"
+                });
+            }
+
+
+            action.name =
+                validation.name;
+        }
+
+
+        if (
+            req.body.description !== undefined
+        ) {
+            action.description =
+                req.body.description;
+        }
+
+
+        if (
+            req.body.enabled !== undefined
+        ) {
+            action.enabled =
+                req.body.enabled === true;
+        }
+
+
+        if (
+            req.body.type !== undefined
+        ) {
+            action.type =
+                req.body.type;
+        }
+
+
+        if (
+            req.body.config !== undefined
+        ) {
+
+            if (
+                !isPlainObject(
+                    req.body.config
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Action config must be an object"
+                });
+            }
+
+
+            const config =
+                req.body.config;
+
+
+            if (
+                !config.resource ||
+                !config.operation
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Action config.resource and config.operation are required"
+                });
+            }
+
+
+            const operationValidation =
+                await resolveConfiguredOperation(
+                    req.project._id,
+                    config.resource,
+                    config.operation
+                );
+
+
+            if (!operationValidation.valid) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        operationValidation.message
+                });
+            }
+
+
+            action.config =
+                config;
+        }
+
+
+        await action.save();
+
+
+        return res.json({
+            success: true,
+            message: "Action updated",
+            data: action
+        });
+
+    } catch (error) {
+
+        console.error(
+            "[ACTION UPDATE ERROR]",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-);
+});
 
 
 // ============================================================
 // DELETE ACTION
 // ============================================================
 //
-// IMPORTANT:
-// This deletes ONLY the Action definition.
-// It does NOT delete the project, resource, users,
-// wallets, or any other project data.
+// DELETE /api/v1/actions/:id
 // ============================================================
 
-router.delete(
-    "/:id",
-    project,
-    protect,
-    admin,
+router.delete("/:id", async (req, res) => {
 
+    try {
+
+        const action =
+            await Action.findOneAndDelete({
+                _id: req.params.id,
+                project: req.project._id
+            });
+
+
+        if (!action) {
+            return res.status(404).json({
+                success: false,
+                message: "Action not found"
+            });
+        }
+
+
+        return res.json({
+            success: true,
+            message: "Action deleted",
+            data: action
+        });
+
+    } catch (error) {
+
+        console.error(
+            "[ACTION DELETE ERROR]",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
+// ============================================================
+// ENABLE ACTION
+// ============================================================
+//
+// PATCH /api/v1/actions/:id/enable
+// ============================================================
+
+router.patch("/:id/enable", async (req, res) => {
+
+    try {
+
+        const action =
+            await Action.findOneAndUpdate(
+                {
+                    _id: req.params.id,
+                    project: req.project._id
+                },
+                {
+                    $set: {
+                        enabled: true
+                    }
+                },
+                {
+                    new: true
+                }
+            );
+
+
+        if (!action) {
+            return res.status(404).json({
+                success: false,
+                message: "Action not found"
+            });
+        }
+
+
+        return res.json({
+            success: true,
+            message: "Action enabled",
+            data: action
+        });
+
+    } catch (error) {
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
+// ============================================================
+// DISABLE ACTION
+// ============================================================
+//
+// PATCH /api/v1/actions/:id/disable
+// ============================================================
+
+router.patch("/:id/disable", async (req, res) => {
+
+    try {
+
+        const action =
+            await Action.findOneAndUpdate(
+                {
+                    _id: req.params.id,
+                    project: req.project._id
+                },
+                {
+                    $set: {
+                        enabled: false
+                    }
+                },
+                {
+                    new: true
+                }
+            );
+
+
+        if (!action) {
+            return res.status(404).json({
+                success: false,
+                message: "Action not found"
+            });
+        }
+
+
+        return res.json({
+            success: true,
+            message: "Action disabled",
+            data: action
+        });
+
+    } catch (error) {
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
+// ============================================================
+// EXECUTE ACTION
+// ============================================================
+//
+// POST /api/v1/actions/:id/execute
+//
+// Body:
+//
+// {
+//     "data": {
+//         "user": "...",
+//         "amount": 500
+//     }
+// }
+//
+// This uses the SAME universalActionEngine.
+// There is no second execution engine here.
+// ============================================================
+
+router.post("/:id/execute", async (req, res) => {
+
+    try {
+
+        const action =
+            await Action.findOne({
+                _id: req.params.id,
+                project: req.project._id
+            });
+
+
+        if (!action) {
+            return res.status(404).json({
+                success: false,
+                message: "Action not found"
+            });
+        }
+
+
+        if (action.enabled === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Action is disabled"
+            });
+        }
+
+
+        const data =
+            isPlainObject(req.body?.data)
+                ? req.body.data
+                : (
+                    isPlainObject(req.body)
+                        ? req.body
+                        : {}
+                );
+
+
+        const result =
+            await executeUniversalAction(
+                action,
+                data,
+                {
+                    projectId:
+                        req.project._id,
+                    actorId:
+                        req.user?._id ||
+                        req.user?.id ||
+                        null,
+                    userId:
+                        req.user?._id ||
+                        req.user?.id ||
+                        null,
+                    req
+                }
+            );
+
+
+        return res.json({
+            success: true,
+            action: action.name,
+            result
+        });
+
+    } catch (error) {
+
+        console.error(
+            "[ACTION EXECUTE ERROR]",
+            error
+        );
+
+        return res.status(400).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
+// ============================================================
+// EXECUTE ACTION BY NAME
+// ============================================================
+//
+// POST /api/v1/actions/name/:name/execute
+//
+// This is useful for the dashboard and dynamic clients when
+// they know the action name rather than MongoDB _id.
+// ============================================================
+
+router.post(
+    "/name/:name/execute",
     async (req, res) => {
 
         try {
 
-            const result =
-                await Action.deleteOne({
-
-                    _id:
-                        req.params.id,
-
-                    project:
-                        req.project._id
-
-                });
+            const validation =
+                validateActionName(
+                    req.params.name
+                );
 
 
-            if (
-                result.deletedCount === 0
-            ) {
-
-                return res.status(404).json({
-
+            if (!validation.valid) {
+                return res.status(400).json({
                     success: false,
-
-                    message:
-                        "Action not found"
-
+                    message: validation.message
                 });
-
             }
 
 
+            const action =
+                await Action.findOne({
+                    project: req.project._id,
+                    name: validation.name
+                });
+
+
+            if (!action) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Action not found"
+                });
+            }
+
+
+            if (action.enabled === false) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Action is disabled"
+                });
+            }
+
+
+            const data =
+                isPlainObject(req.body?.data)
+                    ? req.body.data
+                    : (
+                        isPlainObject(req.body)
+                            ? req.body
+                            : {}
+                    );
+
+
+            const result =
+                await executeUniversalAction(
+                    action,
+                    data,
+                    {
+                        projectId:
+                            req.project._id,
+                        actorId:
+                            req.user?._id ||
+                            req.user?.id ||
+                            null,
+                        userId:
+                            req.user?._id ||
+                            req.user?.id ||
+                            null,
+                        req
+                    }
+                );
+
+
             return res.json({
-
                 success: true,
-
-                message:
-                    "Action deleted"
-
+                action: action.name,
+                result
             });
 
         } catch (error) {
 
             console.error(
-                "DELETE ACTION ERROR:",
+                "[ACTION NAME EXECUTE ERROR]",
                 error
             );
 
-
-            return res.status(500).json({
-
+            return res.status(400).json({
                 success: false,
-
-                message:
-                    error.message
-
+                message: error.message
             });
-
         }
-
     }
 );
 
+
+// ============================================================
+// EXPORT ROUTER
+// ============================================================
 
 module.exports = router;

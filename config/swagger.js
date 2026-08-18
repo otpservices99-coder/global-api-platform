@@ -1,5 +1,25 @@
 const swaggerJsdoc = require("swagger-jsdoc");
 
+const productionUrl =
+    process.env.API_BASE_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : null);
+
+const servers = [];
+
+if (productionUrl) {
+    servers.push({
+        url: productionUrl,
+        description: "Production Server"
+    });
+}
+
+servers.push({
+    url: "http://localhost:3000",
+    description: "Local Development Server"
+});
+
 const options = {
     definition: {
         openapi: "3.0.0",
@@ -10,16 +30,7 @@ const options = {
             description: "Global Reward Platform API"
         },
 
-        servers: [
-            {
-                url: "https://global-api-platform.onrender.com",
-                description: "Production Server"
-            },
-            {
-                url: "http://localhost:3000",
-                description: "Local Development Server"
-            }
-        ],
+        servers,
 
         components: {
             securitySchemes: {

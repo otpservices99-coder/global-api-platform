@@ -2,7 +2,7 @@ const Resource = require("../models/Resource");
 
 
 // ============================================================
-// ALLOWED GENERIC OPERATIONS
+// GENERIC OPERATIONS
 // ============================================================
 
 const ALLOWED_OPERATIONS = [
@@ -17,48 +17,157 @@ const ALLOWED_OPERATIONS = [
 
 
 // ============================================================
-// NORMALIZE OPERATION SETTINGS
+// NORMALIZE OPERATIONS
+// ============================================================
+//
+// Supported forms:
+//
+// "create": true
+//
+// "create": false
+//
+// "create": {
+//     "operation": "create"
+// }
+//
+// The manager preserves object definitions.
 // ============================================================
 
-function normalizeOperations(operations = {}) {
+function normalizeOperations(
+    operations = {}
+) {
 
     const normalized = {};
 
-    for (const operation of ALLOWED_OPERATIONS) {
+    for (
+        const operation of ALLOWED_OPERATIONS
+    ) {
 
         if (
-            Object.prototype.hasOwnProperty.call(
+            !Object.prototype.hasOwnProperty.call(
                 operations,
                 operation
             )
         ) {
 
-            normalized[operation] =
-                operations[operation] === true;
-
-        } else {
-
             normalized[operation] = true;
 
+            continue;
         }
 
+
+        const value =
+            operations[operation];
+
+
+        if (
+            value === true ||
+            value === false
+        ) {
+
+            normalized[operation] =
+                value;
+
+            continue;
+        }
+
+
+        if (
+            value &&
+            typeof value === "object" &&
+            !Array.isArray(value)
+        ) {
+
+            normalized[operation] = {
+                ...value
+            };
+
+            continue;
+        }
+
+
+        throw new Error(
+            `Invalid operation configuration for '${operation}'`
+        );
     }
+
+
+    /*
+     * Preserve additional custom operations.
+     *
+     * This is critical for a global dynamic platform.
+     *
+     * Example:
+     *
+     * wallet.credit
+     * notification.send
+     * withdrawal.approve
+     *
+     * The Resource Manager must not destroy them.
+     */
+
+    for (
+        const [name, value] of
+        Object.entries(operations)
+    ) {
+
+        if (
+            ALLOWED_OPERATIONS.includes(name)
+        ) {
+            continue;
+        }
+
+
+        if (
+            value === true ||
+            value === false
+        ) {
+
+            normalized[name] =
+                value;
+
+            continue;
+        }
+
+
+        if (
+            value &&
+            typeof value === "object" &&
+            !Array.isArray(value)
+        ) {
+
+            normalized[name] = {
+                ...value
+            };
+
+            continue;
+        }
+
+
+        throw new Error(
+            `Invalid operation configuration for '${name}'`
+        );
+    }
+
 
     return normalized;
 }
 
 
 // ============================================================
-// CREATE RESOURCE
+// CREATE
 // ============================================================
 
-exports.create = async (req, res) => {
+exports.create = async (
+    req,
+    res
+) => {
 
     try {
 
         const name =
             String(
-                req.body.name || ""
+                req.body?.name || ""
             ).trim();
 
 
@@ -72,7 +181,6 @@ exports.create = async (req, res) => {
                     "Resource name is required"
 
             });
-
         }
 
 
@@ -89,7 +197,7 @@ exports.create = async (req, res) => {
 
         if (existing) {
 
-            return res.status(400).json({
+            return res.status(409).json({
 
                 success: false,
 
@@ -97,12 +205,17 @@ exports.create = async (req, res) => {
                     "Resource already exists"
 
             });
-
         }
 
 
         const settings =
-            req.body.settings || {};
+            req.body?.settings || {};
+
+
+        const operations =
+            normalizeOperations(
+                settings.operations || {}
+            );
 
 
         const resource =
@@ -114,25 +227,22 @@ exports.create = async (req, res) => {
                 name,
 
                 displayName:
-                    req.body.displayName || "",
+                    req.body?.displayName || "",
 
                 description:
-                    req.body.description || "",
+                    req.body?.description || "",
 
                 icon:
-                    req.body.icon || "",
+                    req.body?.icon || "",
 
                 enabled:
-                    req.body.enabled !== false,
+                    req.body?.enabled !== false,
 
                 settings: {
 
                     ...settings,
 
-                    operations:
-                        normalizeOperations(
-                            settings.operations || {}
-                        )
+                    operations
 
                 }
 
@@ -151,8 +261,13 @@ exports.create = async (req, res) => {
 
         });
 
-
     } catch (error) {
+
+        console.error(
+            "CREATE RESOURCE ERROR:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -162,17 +277,18 @@ exports.create = async (req, res) => {
                 error.message
 
         });
-
     }
-
 };
 
 
 // ============================================================
-// LIST RESOURCES
+// LIST
 // ============================================================
 
-exports.list = async (req, res) => {
+exports.list = async (
+    req,
+    res
+) => {
 
     try {
 
@@ -182,9 +298,10 @@ exports.list = async (req, res) => {
                 project:
                     req.project._id
 
-            })
-            .sort({
+            }).sort({
+
                 createdAt: -1
+
             });
 
 
@@ -197,8 +314,13 @@ exports.list = async (req, res) => {
 
         });
 
-
     } catch (error) {
+
+        console.error(
+            "LIST RESOURCES ERROR:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -208,17 +330,18 @@ exports.list = async (req, res) => {
                 error.message
 
         });
-
     }
-
 };
 
 
 // ============================================================
-// GET SINGLE RESOURCE
+// GET ONE
 // ============================================================
 
-exports.getOne = async (req, res) => {
+exports.getOne = async (
+    req,
+    res
+) => {
 
     try {
 
@@ -244,7 +367,6 @@ exports.getOne = async (req, res) => {
                     "Resource not found"
 
             });
-
         }
 
 
@@ -257,8 +379,13 @@ exports.getOne = async (req, res) => {
 
         });
 
-
     } catch (error) {
+
+        console.error(
+            "GET RESOURCE ERROR:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -268,17 +395,18 @@ exports.getOne = async (req, res) => {
                 error.message
 
         });
-
     }
-
 };
 
 
 // ============================================================
-// UPDATE RESOURCE
+// UPDATE
 // ============================================================
 
-exports.update = async (req, res) => {
+exports.update = async (
+    req,
+    res
+) => {
 
     try {
 
@@ -304,7 +432,6 @@ exports.update = async (req, res) => {
                     "Resource not found"
 
             });
-
         }
 
 
@@ -328,7 +455,6 @@ exports.update = async (req, res) => {
                         "Resource name cannot be empty"
 
                 });
-
             }
 
 
@@ -350,7 +476,7 @@ exports.update = async (req, res) => {
 
             if (duplicate) {
 
-                return res.status(400).json({
+                return res.status(409).json({
 
                     success: false,
 
@@ -358,13 +484,11 @@ exports.update = async (req, res) => {
                         "Resource already exists"
 
                 });
-
             }
 
 
             resource.name =
                 name;
-
         }
 
 
@@ -374,7 +498,6 @@ exports.update = async (req, res) => {
 
             resource.displayName =
                 req.body.displayName;
-
         }
 
 
@@ -384,7 +507,6 @@ exports.update = async (req, res) => {
 
             resource.description =
                 req.body.description;
-
         }
 
 
@@ -394,7 +516,6 @@ exports.update = async (req, res) => {
 
             resource.icon =
                 req.body.icon;
-
         }
 
 
@@ -402,9 +523,23 @@ exports.update = async (req, res) => {
             req.body.enabled !== undefined
         ) {
 
-            resource.enabled =
-                req.body.enabled === true;
+            if (
+                typeof req.body.enabled !== "boolean"
+            ) {
 
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Resource enabled must be a boolean"
+
+                });
+            }
+
+
+            resource.enabled =
+                req.body.enabled;
         }
 
 
@@ -416,21 +551,35 @@ exports.update = async (req, res) => {
                 req.body.settings || {};
 
 
+            const currentSettings =
+                resource.settings &&
+                typeof resource.settings === "object"
+                    ? resource.settings
+                    : {};
+
+
+            const incomingOperations =
+                incomingSettings.operations !== undefined
+                    ? incomingSettings.operations
+                    : currentSettings.operations || {};
+
+
+            const normalizedOperations =
+                normalizeOperations(
+                    incomingOperations
+                );
+
+
             resource.settings = {
 
-                ...resource.settings?.toObject?.(),
-                ...resource.settings,
+                ...currentSettings,
+
                 ...incomingSettings,
 
                 operations:
-                    normalizeOperations(
-                        incomingSettings.operations ??
-                        resource.settings?.operations ??
-                        {}
-                    )
+                    normalizedOperations
 
             };
-
         }
 
 
@@ -449,8 +598,13 @@ exports.update = async (req, res) => {
 
         });
 
-
     } catch (error) {
+
+        console.error(
+            "UPDATE RESOURCE ERROR:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -460,17 +614,18 @@ exports.update = async (req, res) => {
                 error.message
 
         });
-
     }
-
 };
 
 
 // ============================================================
-// DELETE RESOURCE
+// DELETE
 // ============================================================
 
-exports.remove = async (req, res) => {
+exports.remove = async (
+    req,
+    res
+) => {
 
     try {
 
@@ -496,7 +651,6 @@ exports.remove = async (req, res) => {
                     "Resource not found"
 
             });
-
         }
 
 
@@ -509,8 +663,13 @@ exports.remove = async (req, res) => {
 
         });
 
-
     } catch (error) {
+
+        console.error(
+            "DELETE RESOURCE ERROR:",
+            error
+        );
+
 
         return res.status(500).json({
 
@@ -520,9 +679,7 @@ exports.remove = async (req, res) => {
                 error.message
 
         });
-
     }
-
 };
 
 

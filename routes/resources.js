@@ -1,26 +1,54 @@
-const express=require("express");
+const express = require("express");
 
-const router=express.Router();
+const router = express.Router();
 
+const controller = require("../controllers/resourceController");
 
-const controller=require("../controllers/resourceController");
+// ============================================================
+// RESOURCE COLLECTION
+// ============================================================
 
+// List all resources belonging to the current project
+router.get(
+    "/",
+    controller.listResources
+);
 
+// Get the schema for a resource
+// IMPORTANT: this must come BEFORE /:resource/:id
+router.get(
+    "/:resource/schema",
+    controller.getSchema
+);
 
-router.post("/:resource",controller.create);
+// Create a record
+router.post(
+    "/:resource",
+    controller.create
+);
 
+// List records
+router.get(
+    "/:resource",
+    controller.find
+);
 
-router.get("/:resource",controller.find);
+// Get one record
+router.get(
+    "/:resource/:id",
+    controller.findOne
+);
 
+// Update one record
+router.patch(
+    "/:resource/:id",
+    controller.update
+);
 
-router.get("/:resource/:id",controller.findOne);
+// Delete one record
+router.delete(
+    "/:resource/:id",
+    controller.remove
+);
 
-
-router.patch("/:resource/:id",controller.update);
-
-
-router.delete("/:resource/:id",controller.remove);
-
-
-
-module.exports=router;
+module.exports = router;

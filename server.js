@@ -55,8 +55,6 @@ const userRoute =
 const adminRoute =
     require("./routes/admin");
 
-
-
 const dashboardRoute =
     require("./routes/dashboard");
 
@@ -97,10 +95,23 @@ const platformRoute =
     require("./routes/platform");
 
 
+// ============================================================
+// GLOBAL RESOURCE SYSTEM
+// ============================================================
 
 const resourceRoute =
     require("./routes/resources");
 
+const resourceManagerRoute =
+    require("./routes/resourceManager");
+
+const schemaManagerRoute =
+    require("./routes/schemaManager");
+
+
+// ============================================================
+// PLATFORM / ENGINE ROUTES
+// ============================================================
 
 const platformAdminRoute =
     require("./routes/platformAdmin");
@@ -114,29 +125,22 @@ const actionsRoute =
 const engineRoute =
     require("./routes/engine");
 
-
 const handlersRoute =
     require("./routes/handlers");
 
 const searchRoute =
     require("./routes/search");
 
+
+// ============================================================
+// ADMIN ROUTES
+// ============================================================
+
 const adminNotificationsRoute =
     require("./routes/adminNotifications");
 
 const apiKeyRoute =
     require("./routes/apiKeys");
-
-
-// ============================================================
-// RESOURCE MANAGER
-// ============================================================
-
-const resourceManagerRoute =
-    require("./routes/resourceManager");
-
-const schemaManagerRoute =
-    require("./routes/schemaManager");
 
 
 // ============================================================
@@ -237,6 +241,10 @@ app.use(
     userRoute
 );
 
+
+// ============================================================
+// ADMIN NOTIFICATIONS
+// ============================================================
 
 app.use(
     "/api/v1/admin/notifications",
@@ -365,12 +373,51 @@ app.use(
 
 
 // ============================================================
-// PROJECTS
+// ADMIN PROJECTS
 // ============================================================
 
 app.use(
     "/api/v1/admin/projects",
     projectRoute
+);
+
+
+// ============================================================
+// ADMIN API KEYS
+// ============================================================
+
+app.use(
+    "/api/v1/admin/api-keys",
+    project,
+    apiUsage,
+    apiKeyRoute
+);
+
+
+// ============================================================
+// ADMIN RESOURCE MANAGER
+//
+// IMPORTANT:
+//
+// This does NOT create a second resource system.
+//
+// It exposes the SAME resourceManagerRoute that is already
+// available at /api/v1/resource-manager.
+//
+// Therefore:
+//
+// /api/v1/admin/resources
+// /api/v1/resource-manager
+//
+// both operate on the same Resource model.
+//
+// ============================================================
+
+app.use(
+    "/api/v1/admin/resources",
+    project,
+    apiUsage,
+    resourceManagerRoute
 );
 
 
@@ -409,21 +456,17 @@ app.use(
 
 
 // ============================================================
-// EVENTS
-// ============================================================
-
-
-
-
-// ============================================================
-// RECORDS
-// ============================================================
-
-
-
-
-// ============================================================
-// RESOURCES
+// GLOBAL RESOURCE API
+//
+// Dynamic resource names are resolved from the database.
+//
+// Examples:
+//
+// GET  /api/v1/resources
+// GET  /api/v1/resources/users
+// POST /api/v1/resources/users
+// GET  /api/v1/resources/users/:id
+//
 // ============================================================
 
 app.use(
@@ -436,6 +479,17 @@ app.use(
 
 // ============================================================
 // RESOURCE MANAGER
+//
+// Global database-driven Resource definitions.
+//
+// Examples:
+//
+// GET    /api/v1/resource-manager
+// POST   /api/v1/resource-manager
+// GET    /api/v1/resource-manager/:id
+// PUT    /api/v1/resource-manager/:id
+// DELETE /api/v1/resource-manager/:id
+//
 // ============================================================
 
 app.use(
@@ -459,10 +513,18 @@ app.use(
 
 
 // ============================================================
-// WORKFLOWS
+// ADMIN SCHEMA MANAGER
+//
+// Same global Schema Manager.
+// This is only an additional API namespace.
 // ============================================================
 
-
+app.use(
+    "/api/v1/admin/schemas",
+    project,
+    apiUsage,
+    schemaManagerRoute
+);
 
 
 // ============================================================
@@ -499,6 +561,16 @@ app.use(
 
 // ============================================================
 // GLOBAL ACTION ENGINE
+//
+// Action
+//   ↓
+// Resource
+//   ↓
+// Operation
+//   ↓
+// ResourceService
+//
+// No Earnify-specific action implementation here.
 // ============================================================
 
 app.use(
@@ -520,13 +592,6 @@ app.use(
 
 
 // ============================================================
-// WORKFLOW EXECUTIONS
-// ============================================================
-
-
-
-
-// ============================================================
 // HANDLERS
 // ============================================================
 
@@ -537,27 +602,12 @@ app.use(
 
 
 // ============================================================
-// ADMIN NOTIFICATIONS
+// ROLE / WORKFLOW EXTENSIONS
 // ============================================================
-
-app.use(
-    "/api/v1/admin/notifications",
-    project,
-    apiUsage,
-    adminNotificationsRoute
-);
-
-
+//
+// Reserved for dynamically loaded workflow and execution
+// systems. No hard-coded business resources belong here.
 // ============================================================
-// API KEYS
-// ============================================================
-
-app.use(
-    "/api/v1/admin/api-keys",
-    project,
-    apiUsage,
-    apiKeyRoute
-);
 
 
 // ============================================================
@@ -568,8 +618,15 @@ app.use(
     (req, res) => {
 
         res.status(404).json({
+
             success: false,
-            message: "Route not found"
+
+            message: "Route not found",
+
+            path: req.originalUrl,
+
+            method: req.method
+
         });
 
     }
@@ -588,9 +645,20 @@ app.use(
             err
         );
 
-        res.status(500).json({
+        if (res.headersSent) {
+            return next(err);
+        }
+
+        res.status(
+            err.status || 500
+        ).json({
+
             success: false,
-            message: "Internal server error"
+
+            message:
+                err.message ||
+                "Internal server error"
+
         });
 
     }
@@ -610,6 +678,26 @@ app.listen(
 
         console.log(
             `🚀 Global Platform API running on port ${PORT}`
+        );
+
+        console.log(
+            `📚 Swagger: /api-docs`
+        );
+
+        console.log(
+            `🌐 Resources: /api/v1/resources`
+        );
+
+        console.log(
+            `⚙️ Resource Manager: /api/v1/resource-manager`
+        );
+
+        console.log(
+            `🛡️ Admin Resources: /api/v1/admin/resources`
+        );
+
+        console.log(
+            `⚡ Action Engine: /api/v1/engine`
         );
 
     }
