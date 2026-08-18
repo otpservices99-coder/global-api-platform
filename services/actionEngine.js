@@ -2,21 +2,22 @@
 // GLOBAL ACTION ENGINE
 // ============================================================
 //
-// Compatibility facade.
+// Universal execution facade.
 //
-// Execution:
+// Priority:
 //
-// Action
-//   ↓
-// Registered Handler OR Universal Action Engine
-//   ↓
-// Real Resource Operation
-//   ↓
-// Verify result
-//   ↓
-// Sanitize result
+// 1. Explicitly configured handler
+// 2. Explicit multi-step configuration
+// 3. Configured Resource + Operation
+// 4. Implicit registered handler ONLY for actions explicitly
+//    declared as handler actions
 //
-// No project-specific action names.
+// IMPORTANT:
+// A registered handler must NEVER override a database-configured
+// resource operation.
+//
+// Every successful result must come from a real successful
+// execution.
 // ============================================================
 
 const {
@@ -25,8 +26,7 @@ const {
 } = require("./universalActionEngine");
 
 const {
-    execute,
-    has
+    execute
 } = require("../handlers");
 
 
@@ -46,7 +46,7 @@ function getActionName(action) {
 
 
 // ============================================================
-// EXECUTION RESULT VALIDATION
+// RESULT VALIDATION
 // ============================================================
 
 function assertExecutionSucceeded(
@@ -58,6 +58,7 @@ function assertExecutionSucceeded(
         result === undefined ||
         result === null
     ) {
+
         throw new Error(
             `Action '${actionName}' executed but returned no result`
         );
@@ -66,10 +67,12 @@ function assertExecutionSucceeded(
 
     if (
         typeof result === "object" &&
-        result.success === false
+        result.success !== true
     ) {
+
         throw new Error(
             result.message ||
+            result.error ||
             `Action '${actionName}' failed`
         );
     }
@@ -89,6 +92,7 @@ async function executeAction(
 ) {
 
     if (!action) {
+
         throw new Error(
             "Action is required"
         );
@@ -96,6 +100,7 @@ async function executeAction(
 
 
     if (action.enabled === false) {
+
         throw new Error(
             "Action is disabled"
         );
@@ -107,7 +112,9 @@ async function executeAction(
         action.project ||
         null;
 
+
     if (!projectId) {
+
         throw new Error(
             "Project ID is required"
         );
@@ -117,7 +124,9 @@ async function executeAction(
     const actionName =
         getActionName(action);
 
+
     if (!actionName) {
+
         throw new Error(
             "Action name is required"
         );
@@ -137,8 +146,10 @@ async function executeAction(
             null,
 
         data:
-            context.data ||
-            {},
+            context.data &&
+            typeof context.data === "object"
+                ? context.data
+                : {},
 
         req:
             context.req ||
@@ -154,9 +165,6 @@ async function executeAction(
     };
 
 
-    let result;
-
-
     // ========================================================
     // EXPLICIT HANDLER
     // ========================================================
@@ -167,19 +175,21 @@ async function executeAction(
             ? action.config.handler.trim()
             : null;
 
+
     if (configuredHandler) {
 
-        result =
+        const result =
             await execute(
                 configuredHandler,
                 runtimeContext
             );
 
-        result =
-            assertExecutionSucceeded(
-                result,
-                actionName
-            );
+
+        assertExecutionSucceeded(
+            result,
+            actionName
+        );
+
 
         return sanitizeActionResult(
             result
@@ -188,46 +198,31 @@ async function executeAction(
 
 
     // ========================================================
-    // HANDLER ACTION
+    // EXPLICIT HANDLER ACTION
+    // ========================================================
+    //
+    // Only an action explicitly declared as a handler action
+    // may use its registered action-name handler automatically.
+    //
+    // A normal resource action MUST NOT reach this branch.
     // ========================================================
 
-    if (action.type === "handler") {
+    if (
+        action.type === "handler"
+    ) {
 
-        result =
+        const result =
             await execute(
                 actionName,
                 runtimeContext
             );
 
-        result =
-            assertExecutionSucceeded(
-                result,
-                actionName
-            );
 
-        return sanitizeActionResult(
-            result
+        assertExecutionSucceeded(
+            result,
+            actionName
         );
-    }
 
-
-    // ========================================================
-    // REGISTERED HANDLER
-    // ========================================================
-
-    if (has(actionName)) {
-
-        result =
-            await execute(
-                actionName,
-                runtimeContext
-            );
-
-        result =
-            assertExecutionSucceeded(
-                result,
-                actionName
-            );
 
         return sanitizeActionResult(
             result
@@ -238,8 +233,13 @@ async function executeAction(
     // ========================================================
     // UNIVERSAL ACTION
     // ========================================================
+    //
+    // Resource/operation configuration ALWAYS gets priority.
+    //
+    // This is the critical fix.
+    // ========================================================
 
-    result =
+    const result =
         await executeUniversalAction({
 
             actionRecord:
@@ -256,8 +256,7 @@ async function executeAction(
                 null,
 
             data:
-                context.data ||
-                {},
+                context.data || {},
 
             req:
                 context.req ||
@@ -265,11 +264,10 @@ async function executeAction(
         });
 
 
-    result =
-        assertExecutionSucceeded(
-            result,
-            actionName
-        );
+    assertExecutionSucceeded(
+        result,
+        actionName
+    );
 
 
     return sanitizeActionResult(
@@ -281,11 +279,6 @@ async function executeAction(
 // ============================================================
 // PROCESS MULTIPLE ACTIONS
 // ============================================================
-//
-// Every action is isolated.
-//
-// One failure does not turn into success.
-// ============================================================
 
 async function processActions(
     event = {},
@@ -293,6 +286,7 @@ async function processActions(
 ) {
 
     if (!Array.isArray(actions)) {
+
         throw new Error(
             "Actions must be an array"
         );
@@ -315,7 +309,9 @@ async function processActions(
 
             const result =
                 await executeAction(
+
                     action,
+
                     {
 
                         projectId:
@@ -334,8 +330,7 @@ async function processActions(
                             null,
 
                         data:
-                            event.data ||
-                            {},
+                            event.data || {},
 
                         req:
                             event.req ||
@@ -400,7 +395,10 @@ function hasUniversalConfiguration(
             : {};
 
 
-    if (action.type === "handler") {
+    if (
+        action.type === "handler"
+    ) {
+
         return false;
     }
 
@@ -409,6 +407,7 @@ function hasUniversalConfiguration(
         typeof config.handler === "string" &&
         config.handler.trim()
     ) {
+
         return false;
     }
 
@@ -417,6 +416,7 @@ function hasUniversalConfiguration(
         Array.isArray(config.steps) &&
         config.steps.length > 0
     ) {
+
         return true;
     }
 

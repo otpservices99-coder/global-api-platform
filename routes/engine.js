@@ -15,44 +15,47 @@ const {
 const protect = require("../middleware/auth");
 
 
-/*
-|--------------------------------------------------------------------------
-| GLOBAL ACTION ENGINE
-|--------------------------------------------------------------------------
-|
-| POST /api/v1/engine
-|
-| Universal execution gateway.
-|
-| The route is intentionally thin:
-|
-|   API key
-|       ↓
-|   Project
-|       ↓
-|   Action definition
-|       ↓
-|   Action Engine
-|       ↓
-|   Real execution
-|
-|--------------------------------------------------------------------------
-*/
-
+// ============================================================
+// GLOBAL ACTION ENGINE
+// ============================================================
+//
+// POST /api/v1/engine
+//
+// The route is only the gateway.
+//
+// API key
+//   ↓
+// Project
+//   ↓
+// Action definition
+//   ↓
+// Universal Action Engine
+//   ↓
+// Real operation
+//   ↓
+// Verified result
+// ============================================================
 
 router.post(
     "/",
 
-    // ------------------------------------------------------------
+    // ----------------------------------------------------------
     // OPTIONAL JWT
-    // ------------------------------------------------------------
+    // ----------------------------------------------------------
 
-    async (req, res, next) => {
+    async (
+        req,
+        res,
+        next
+    ) => {
 
         if (
             req.headers.authorization &&
-            req.headers.authorization.startsWith("Bearer ")
+            req.headers.authorization.startsWith(
+                "Bearer "
+            )
         ) {
+
             return protect(
                 req,
                 res,
@@ -60,25 +63,38 @@ router.post(
             );
         }
 
+
         next();
     },
 
-    // ------------------------------------------------------------
-    // EXECUTION
-    // ------------------------------------------------------------
 
-    async (req, res) => {
+    // ----------------------------------------------------------
+    // EXECUTION
+    // ----------------------------------------------------------
+
+    async (
+        req,
+        res
+    ) => {
 
         try {
+
+            // ----------------------------------------------------
+            // PROJECT
+            // ----------------------------------------------------
 
             const projectId =
                 req.project?._id ||
                 req.project?.id ||
                 req.projectId;
 
+
             if (!projectId) {
+
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Project context not available"
                 });
@@ -94,9 +110,13 @@ router.post(
                     req.body?.action || ""
                 ).trim();
 
+
             if (!actionName) {
+
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Action name is required"
                 });
@@ -111,7 +131,9 @@ router.post(
                 req.body?.data &&
                 typeof req.body.data === "object" &&
                 !Array.isArray(req.body.data)
+
                     ? req.body.data
+
                     : {};
 
 
@@ -121,14 +143,24 @@ router.post(
 
             const action =
                 await Action.findOne({
-                    project: projectId,
-                    name: actionName,
-                    enabled: true
+
+                    project:
+                        projectId,
+
+                    name:
+                        actionName,
+
+                    enabled:
+                        true
                 });
 
+
             if (!action) {
+
                 return res.status(404).json({
+
                     success: false,
+
                     message:
                         `Action '${actionName}' is not available`
                 });
@@ -139,29 +171,47 @@ router.post(
             // PERMISSION
             // ----------------------------------------------------
 
-            const directPermission =
-                hasPermission(
-                    req.apiKey,
-                    actionName
-                );
+            let permitted = false;
 
-            const resolvedPermission =
-                directPermission ||
-                (
+
+            try {
+
+                permitted =
+                    hasPermission(
+                        req.apiKey,
+                        actionName
+                    );
+
+            } catch (error) {
+
+                permitted = false;
+            }
+
+
+            if (!permitted) {
+
+                permitted =
                     Array.isArray(
                         req.apiKeyPermissions
                     ) &&
                     (
                         req.apiKeyPermissions.includes("*") ||
-                        req.apiKeyPermissions.includes(actionName)
-                    )
-                );
+                        req.apiKeyPermissions.includes(
+                            actionName
+                        )
+                    );
+            }
 
-            if (!resolvedPermission) {
+
+            if (!permitted) {
+
                 return res.status(403).json({
+
                     success: false,
+
                     message:
                         "API key does not have permission to execute this action",
+
                     action:
                         actionName
                 });
@@ -219,8 +269,9 @@ router.post(
                         req.ip,
 
                     userAgent:
-                        req.get("user-agent") ||
-                        null,
+                        req.get(
+                            "user-agent"
+                        ) || null,
 
                     apiKeySource:
                         req.apiKeySource ||
@@ -235,13 +286,15 @@ router.post(
 
             const result =
                 await processActions(
+
                     event,
+
                     [action]
                 );
 
 
             // ----------------------------------------------------
-            // NEVER REPORT A FAILED ACTION AS SUCCESS
+            // VERIFY ACTUAL EXECUTION
             // ----------------------------------------------------
 
             const actionResult =
@@ -249,11 +302,11 @@ router.post(
                     ? result[0]
                     : result;
 
-            const executionSucceeded =
-                actionResult &&
-                actionResult.success === true;
 
-            if (!executionSucceeded) {
+            if (
+                !actionResult ||
+                actionResult.success !== true
+            ) {
 
                 return res.status(422).json({
 
@@ -293,6 +346,7 @@ router.post(
                 "GLOBAL ACTION ENGINE ERROR:",
                 error
             );
+
 
             return res.status(500).json({
 
