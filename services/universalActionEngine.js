@@ -883,72 +883,88 @@ async function resolveOperation({
     config = {},
     context = {}
 }) {
-
-    if (
-        !projectId
-    ) {
-        return null;
-    }
-
-    if (
-        !resource
-    ) {
-        return null;
-    }
-
-    if (
-        !operation
-    ) {
+    if (!projectId || !resource || !operation) {
         return null;
     }
 
     const resourceDocument =
         await resourceService.getResource({
-
             projectId,
-
             resource
         });
 
-    if (
-        !resourceDocument
-    ) {
+    if (!resourceDocument) {
         return null;
     }
 
     const operations =
-        resourceDocument
-            ?.settings
-            ?.operations || {};
+        resourceDocument?.settings?.operations ||
+        resourceDocument?.operations ||
+        {};
 
-    const definition =
-        operations[operation];
+    const requestedOperation = String(operation).trim();
 
-    if (
-        !definition
-    ) {
+    // ------------------------------------------------------------
+    // 1. Direct operation match
+    // ------------------------------------------------------------
+
+    let definition = operations[requestedOperation];
+    let matchedName = requestedOperation;
+
+    // ------------------------------------------------------------
+    // 2. Operation alias match
+    //
+    // Example:
+    // resource.operations.credit.operation === "increment"
+    //
+    // This allows an action to request "increment" while the
+    // resource exposes the configured operation as "credit".
+    // ------------------------------------------------------------
+
+    if (!definition) {
+        for (const [name, candidate] of Object.entries(operations)) {
+            if (
+                candidate &&
+                typeof candidate === "object" &&
+                String(candidate.operation || "").trim() ===
+                    requestedOperation
+            ) {
+                definition = candidate;
+                matchedName = name;
+                break;
+            }
+        }
+    }
+
+    if (!definition) {
         return null;
     }
 
     const resolvedDefinition =
-        resolveObject(
-            definition,
-            context
-        );
+        definition === true
+            ? {}
+            : resolveObject(
+                definition,
+                context
+            );
 
     const resolvedConfig =
         resolveObject(
-            config,
+            config || {},
             context
         );
 
     return {
-
         resourceDocument,
 
+        // Execute the operation declared by the resource.
         operation:
-            resolvedDefinition.operation ||
-            operation,
+            resolvedDefinition?.operation ||
+            requestedOperation,
+
+        // Keep the resource operation name available for
+        // diagnostics and future dynamic execution.
+        operationName: matchedName,
 
         config:
             mergeObjects(
@@ -957,7 +973,6 @@ async function resolveOperation({
             )
     };
 }
-
 
 // ============================================================================
 // PING / HEALTH
