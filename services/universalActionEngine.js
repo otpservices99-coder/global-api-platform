@@ -394,11 +394,64 @@ function resolveObject(
     value,
     context = {}
 ) {
+    // ------------------------------------------------------------
+    // Null / undefined
+    // ------------------------------------------------------------
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return value;
+    }
+
+    // ------------------------------------------------------------
+    // Strings
+    //
+    // IMPORTANT:
+    // Resolve templates before returning.
+    // Exact templates preserve their original type.
+    //
+    // {{projectId}}  -> ObjectId
+    // {{data.user}}  -> ObjectId
+    // ------------------------------------------------------------
+
+    if (
+        typeof value === "string"
+    ) {
+        return resolveValue(
+            value,
+            context
+        );
+    }
+
+    // ------------------------------------------------------------
+    // Preserve MongoDB / Mongoose ObjectIds
+    // ------------------------------------------------------------
+
+    if (
+        value &&
+        typeof value === "object" &&
+        typeof value.toHexString === "function"
+    ) {
+        return value;
+    }
+
+    if (
+        value &&
+        typeof value === "object" &&
+        value._bsontype === "ObjectId"
+    ) {
+        return value;
+    }
+
+    // ------------------------------------------------------------
+    // Arrays
+    // ------------------------------------------------------------
 
     if (
         Array.isArray(value)
     ) {
-
         return value.map(
             item =>
                 resolveObject(
@@ -408,18 +461,24 @@ function resolveObject(
         );
     }
 
+    // ------------------------------------------------------------
+    // Plain objects
+    // ------------------------------------------------------------
+
     if (
         value &&
-        typeof value === "object"
+        typeof value === "object" &&
+        (
+            Object.getPrototypeOf(value) === Object.prototype ||
+            Object.getPrototypeOf(value) === null
+        )
     ) {
-
         const output = {};
 
         for (
             const [key, item]
             of Object.entries(value)
         ) {
-
             output[key] =
                 resolveObject(
                     item,
@@ -430,10 +489,11 @@ function resolveObject(
         return output;
     }
 
-    return resolveValue(
-        value,
-        context
-    );
+    // ------------------------------------------------------------
+    // Preserve other special objects
+    // ------------------------------------------------------------
+
+    return value;
 }
 
 
