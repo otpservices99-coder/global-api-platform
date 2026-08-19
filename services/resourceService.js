@@ -211,6 +211,64 @@ function buildProjectFilter(
 
 
 // ============================================================
+// NORMALIZE MONGODB VALUES
+// ============================================================
+//
+// Converts BSON/Mongoose ObjectIds to canonical hex strings
+// before passing data into a Mongoose model.
+//
+// Mongoose will cast those strings back to ObjectId according
+// to the target schema.
+//
+// This keeps ResourceService provider-safe and avoids
+// cross-Mongoose/BSON ObjectId representation problems.
+// ============================================================
+
+function normalizeMongoValues(value) {
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return value;
+    }
+
+    if (
+        typeof value === "object" &&
+        typeof value.toHexString === "function"
+    ) {
+        return value.toHexString();
+    }
+
+    if (
+        Array.isArray(value)
+    ) {
+        return value.map(
+            item =>
+                normalizeMongoValues(item)
+        );
+    }
+
+    if (
+        typeof value === "object"
+    ) {
+        const output = {};
+
+        for (
+            const [key, item]
+            of Object.entries(value)
+        ) {
+            output[key] =
+                normalizeMongoValues(item);
+        }
+
+        return output;
+    }
+
+    return value;
+}
+
+
+// ============================================================
 // PREPARE CREATE DATA
 // ============================================================
 
@@ -341,16 +399,18 @@ async function create({
     );
 
     const preparedData =
-        provider === "mongoose"
-            ? prepareCreateData(
+    provider === "mongoose"
+        ? normalizeMongoValues(
+            prepareCreateData(
                 Model,
                 projectId,
                 data
             )
-            : {
-                ...data,
-                project: projectId
-            };
+        )
+        : {
+            ...data,
+            project: projectId
+        };
 
     const validation =
         await validateResourceData({
