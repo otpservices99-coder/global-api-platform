@@ -1,21 +1,29 @@
 const platform =
     require("../../services/platformService");
 
-
 module.exports = {
 
     name: "wallet.debit",
 
     execute: async (ctx) => {
 
+        const data =
+            ctx?.data || {};
+
+        /*
+         * IMPORTANT:
+         * data.user is authoritative for engine/admin
+         * wallet operations.
+         *
+         * Never allow ctx.userId to override data.user.
+         */
         const userId =
+            data.user ||
+            data.userId ||
             ctx?.userId ||
-            ctx?.data?.user ||
-            ctx?.data?.userId ||
             ctx?.event?.entityId;
 
         if (!userId) {
-
             return {
                 success: false,
                 message:
@@ -24,13 +32,12 @@ module.exports = {
         }
 
         const amount =
-            Number(ctx?.data?.amount);
+            Number(data.amount);
 
         if (
             !Number.isFinite(amount) ||
             amount <= 0
         ) {
-
             return {
                 success: false,
                 message:
@@ -39,7 +46,6 @@ module.exports = {
         }
 
         if (!ctx?.projectId) {
-
             return {
                 success: false,
                 message:
@@ -54,7 +60,7 @@ module.exports = {
                     ctx.projectId,
                     userId,
                     amount,
-                    ctx?.data?.description ||
+                    data.description ||
                     "Wallet Debit"
                 );
 

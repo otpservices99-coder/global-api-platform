@@ -1,20 +1,30 @@
 const platform =
     require("../../services/platformService");
 
-
 module.exports = {
 
     name: "wallet.credit",
 
     execute: async (ctx) => {
 
+        const data =
+            ctx?.data || {};
+
+        /*
+         * IMPORTANT:
+         * For engine/admin calls, data.user is the
+         * wallet owner. Never let ctx.userId override it.
+         *
+         * userId is retained only as a fallback for
+         * self-service calls where data.user is absent.
+         */
         const userId =
+            data.user ||
+            data.userId ||
             ctx?.userId ||
-            ctx?.data?.user ||
             ctx?.event?.entityId;
 
         if (!userId) {
-
             return {
                 success: false,
                 message:
@@ -23,13 +33,12 @@ module.exports = {
         }
 
         const amount =
-            Number(ctx?.data?.amount);
+            Number(data.amount);
 
         if (
             !Number.isFinite(amount) ||
             amount <= 0
         ) {
-
             return {
                 success: false,
                 message:
@@ -38,7 +47,6 @@ module.exports = {
         }
 
         if (!ctx?.projectId) {
-
             return {
                 success: false,
                 message:
@@ -53,7 +61,7 @@ module.exports = {
                     ctx.projectId,
                     userId,
                     amount,
-                    ctx?.data?.description ||
+                    data.description ||
                     "Wallet Credit"
                 );
 
