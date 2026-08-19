@@ -148,7 +148,6 @@ function getPath(
     object,
     path
 ) {
-
     if (
         object === undefined ||
         object === null ||
@@ -162,8 +161,7 @@ function getPath(
             .split(".")
             .filter(Boolean);
 
-    let current =
-        object;
+    let current = object;
 
     for (
         const part
@@ -177,8 +175,91 @@ function getPath(
             return undefined;
         }
 
-        current =
-            current[part];
+        // Normal property access.
+        if (
+            Object.prototype.hasOwnProperty.call(
+                Object(current),
+                part
+            ) ||
+            part in Object(current)
+        ) {
+            current =
+                current[part];
+
+            continue;
+        }
+
+        // Mongoose documents can expose fields through
+        // getters/proxies rather than enumerable properties.
+        try {
+            current =
+                current[part];
+        } catch {
+            return undefined;
+        }
+    }
+
+    return current;
+}
+
+
+// ============================================================================
+// TEMPLATE VALUE RESOLUTION
+// ============================================================================
+
+function getPath(
+    object,
+    path
+) {
+    if (
+        object === undefined ||
+        object === null ||
+        !path
+    ) {
+        return undefined;
+    }
+
+    const parts =
+        String(path)
+            .split(".")
+            .filter(Boolean);
+
+    let current = object;
+
+    for (
+        const part
+        of parts
+    ) {
+
+        if (
+            current === undefined ||
+            current === null
+        ) {
+            return undefined;
+        }
+
+        // Normal property access.
+        if (
+            Object.prototype.hasOwnProperty.call(
+                Object(current),
+                part
+            ) ||
+            part in Object(current)
+        ) {
+            current =
+                current[part];
+
+            continue;
+        }
+
+        // Mongoose documents can expose fields through
+        // getters/proxies rather than enumerable properties.
+        try {
+            current =
+                current[part];
+        } catch {
+            return undefined;
+        }
     }
 
     return current;
@@ -205,14 +286,21 @@ function resolveValue(
             /^\{\{\s*([^}]+?)\s*\}\}$/
         );
 
-    // Preserve original data type for exact templates.
+    // ------------------------------------------------------------
+    // Exact template
     //
-    // Example:
+    // Preserve the original value/type.
     //
-    // "{{ data.user }}"
+    // Examples:
     //
-    // returns the actual ObjectId/string/value,
-    // not a stringified representation.
+    // {{projectId}}
+    // {{data.user}}
+    // {{item._id}}
+    // {{fanoutItem._id}}
+    //
+    // This is important for MongoDB ObjectIds.
+    // ------------------------------------------------------------
+
     if (exact) {
 
         const resolved =
@@ -224,7 +312,10 @@ function resolveValue(
         return resolved;
     }
 
-    // Resolve embedded templates as strings.
+    // ------------------------------------------------------------
+    // Embedded templates
+    // ------------------------------------------------------------
+
     return value.replace(
         /\{\{\s*([^}]+?)\s*\}\}/g,
         (
@@ -244,6 +335,34 @@ function resolveValue(
             ) {
                 return "";
             }
+
+            // ----------------------------------------------------
+            // MongoDB / Mongoose ObjectId
+            //
+            // Convert ObjectIds to their canonical string form
+            // instead of JSON.stringify(Buffer/ObjectId).
+            // ----------------------------------------------------
+
+            if (
+                resolved &&
+                typeof resolved === "object" &&
+                typeof resolved.toHexString === "function"
+            ) {
+                return resolved.toHexString();
+            }
+
+            if (
+                resolved &&
+                typeof resolved === "object" &&
+                resolved._bsontype === "ObjectId" &&
+                typeof resolved.toString === "function"
+            ) {
+                return resolved.toString();
+            }
+
+            // ----------------------------------------------------
+            // Other objects
+            // ----------------------------------------------------
 
             if (
                 typeof resolved === "object"
