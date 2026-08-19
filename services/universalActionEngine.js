@@ -1189,7 +1189,118 @@ async function executeResourceAction(
         // ========================================================
         // CREATE
         // ========================================================
+                case "broadcast": {
+            const source = actualConfig.source || {};
+            const target = actualConfig.target || {};
 
+            if (!source.resource || !source.operation) {
+                throw new Error(
+                    "Broadcast requires source.resource and source.operation"
+                );
+            }
+
+            if (!target.resource || !target.operation) {
+                throw new Error(
+                    "Broadcast requires target.resource and target.operation"
+                );
+            }
+
+            const sourceConfig =
+                resolveObject(
+                    source.config || {},
+                    context
+                );
+
+            const sourceResult =
+                await executeResourceAction(
+                    source.resource,
+                    source.operation,
+                    sourceConfig,
+                    context
+                );
+
+            assertSuccessfulResult(
+                sourceResult,
+                `broadcast source ${source.resource}.${source.operation}`
+            );
+
+            const records =
+                Array.isArray(sourceResult.data)
+                    ? sourceResult.data
+                    : [];
+
+            const results = [];
+
+            for (
+                let index = 0;
+                index < records.length;
+                index++
+            ) {
+                const item = records[index];
+
+                if (
+                    !item ||
+                    typeof item !== "object"
+                ) {
+                    continue;
+                }
+
+                const itemContext = {
+                    ...context,
+                    item,
+                    fanoutItem: item,
+                    currentItem: item
+                };
+
+                const targetConfig =
+                    resolveObject(
+                        target.config || {},
+                        itemContext
+                    );
+
+                const targetData =
+                    resolveObject(
+                        target.data || {},
+                        itemContext
+                    );
+
+                const finalTargetConfig = {
+                    ...targetConfig,
+                    data: targetData
+                };
+
+                const targetResult =
+                    await executeResourceAction(
+                        target.resource,
+                        target.operation,
+                        finalTargetConfig,
+                        itemContext
+                    );
+
+                assertSuccessfulResult(
+                    targetResult,
+                    `broadcast[${index}] ${target.resource}.${target.operation}`
+                );
+
+                results.push({
+                    index,
+                    user:
+                        item._id ||
+                        item.id ||
+                        null,
+                    result:
+                        targetResult
+                });
+            }
+
+            result = {
+                success: true,
+                count: results.length,
+                data: results
+            };
+
+            break;
+        }
         case "create": {
 
             const createData =
@@ -1778,91 +1889,278 @@ async function executeResourceAction(
         }
 
 
-        // ========================================================
+                // ========================================================
         // FANOUT
         // ========================================================
+        //
+        // Generic fanout:
+        //
+        // source:
+        //   executes a resource operation returning records
+        //
+        // target:
+        //   executes once for every returned record
+        //
+        // The current record is exposed as:
+        //   {{fanoutItem._id}}
+        //   {{fanoutItem.user}}
+        //   {{fanoutItem.email}}
+        //
+        // This is intentionally resource-agnostic.
+        // ========================================================
+        case "broadcast": {
+    const source = actualConfig.source || {};
+    const target = actualConfig.target || {};
 
+    if (!source.resource || !source.operation) {
+        throw new Error(
+            "Broadcast requires source.resource and source.operation"
+        );
+    }
+
+    if (!target.resource || !target.operation) {
+        throw new Error(
+            "Broadcast requires target.resource and target.operation"
+        );
+    }
+
+    const sourceConfig = resolveObject(
+        source.config || {},
+        context
+    );
+
+    const sourceResult = await executeResourceAction(
+        source.resource,
+        source.operation,
+        sourceConfig,
+        context
+    );
+
+    assertSuccessfulResult(
+        sourceResult,
+        `broadcast source ${source.resource}.${source.operation}`
+    );
+
+    const records = Array.isArray(sourceResult.data)
+        ? sourceResult.data
+        : [];
+
+    const results = [];
+
+    for (let index = 0; index < records.length; index++) {
+        const item = records[index];
+
+        const itemContext = {
+            ...context,
+            item,
+            data: {
+                ...(context.data || {}),
+                user: item?._id || item?.id
+            }
+        };
+
+        const targetConfig = resolveObject(
+            target.config || {},
+            itemContext
+        );
+
+        const targetData = resolveObject(
+            target.data || {},
+            itemContext
+        );
+
+        if (
+            targetData &&
+            typeof targetData === "object" &&
+            !Array.isArray(targetData)
+        ) {
+            targetConfig.data = targetData;
+        }
+
+        const targetResult = await executeResourceAction(
+            target.resource,
+            target.operation,
+            targetConfig,
+            itemContext
+        );
+
+        assertSuccessfulResult(
+            targetResult,
+            `broadcast target ${index} ${target.resource}.${target.operation}`
+        );
+
+        results.push({
+            index,
+            user: item?._id || item?.id || null,
+            result: targetResult
+        });
+    }
+
+    result = {
+        success: true,
+        count: results.length,
+        data: results
+    };
+
+    break;
+}
         case "fanout": {
+            const source =
+                actualConfig.source &&
+                typeof actualConfig.source === "object"
+                    ? actualConfig.source
+                    : null;
 
-            const targets =
-                Array.isArray(
-                    actualConfig.targets
-                )
-                    ? actualConfig.targets
-                    : [];
+            const target =
+                actualConfig.target &&
+                typeof actualConfig.target === "object"
+                    ? actualConfig.target
+                    : null;
 
-            if (
-                targets.length === 0
-            ) {
+            if (!source) {
                 throw new Error(
-                    "Fanout requires at least one target"
+                    "Fanout requires a source"
                 );
             }
+
+            if (!target) {
+                throw new Error(
+                    "Fanout requires a target"
+                );
+            }
+
+            const sourceResource =
+                resolveValue(
+                    source.resource,
+                    context
+                );
+
+            const sourceOperation =
+                resolveValue(
+                    source.operation,
+                    context
+                );
+
+            const sourceConfig =
+                resolveObject(
+                    source.config || {},
+                    context
+                );
+
+            if (!sourceResource) {
+                throw new Error(
+                    "Fanout source requires a resource"
+                );
+            }
+
+            if (!sourceOperation) {
+                throw new Error(
+                    "Fanout source requires an operation"
+                );
+            }
+
+            // ----------------------------------------------------
+            // Execute source
+            // ----------------------------------------------------
+
+            const sourceResult =
+                await executeResourceAction(
+                    sourceResource,
+                    sourceOperation,
+                    sourceConfig,
+                    context
+                );
+
+            assertSuccessfulResult(
+                sourceResult,
+                `fanout source ${sourceResource}.${sourceOperation}`
+            );
+
+            let records =
+                sourceResult.data;
+
+            // A find operation normally returns an array.
+            // Also accept a single record for generic reuse.
+            if (!Array.isArray(records)) {
+                records =
+                    records === null ||
+                    records === undefined
+                        ? []
+                        : [records];
+            }
+
+            // ----------------------------------------------------
+            // Execute target once per source record
+            // ----------------------------------------------------
 
             const results = [];
 
             for (
                 let index = 0;
-                index < targets.length;
+                index < records.length;
                 index++
             ) {
-
-                const target =
-                    targets[index];
+                const fanoutItem =
+                    records[index];
 
                 if (
-                    !target ||
-                    typeof target !== "object"
+                    !fanoutItem ||
+                    typeof fanoutItem !== "object"
                 ) {
-                    throw new Error(
-                        `Invalid fanout target at index ${index}`
-                    );
+                    continue;
                 }
+
+                const fanoutContext = {
+                    ...context,
+
+                    // Current fanout record.
+                    fanoutItem,
+
+                    // Also expose it under the conventional
+                    // current/target aliases for future actions.
+                    currentItem:
+                        fanoutItem,
+
+                    target:
+                        fanoutItem
+                };
 
                 const targetResource =
                     resolveValue(
                         target.resource,
-                        context
+                        fanoutContext
                     );
 
                 const targetOperation =
                     resolveValue(
                         target.operation,
-                        context
+                        fanoutContext
                     );
 
                 const targetConfig =
                     resolveObject(
                         target.config || {},
-                        context
+                        fanoutContext
                     );
 
-                if (
-                    !targetResource
-                ) {
+                if (!targetResource) {
                     throw new Error(
-                        `Fanout target ${index} requires a resource`
+                        `Fanout target requires a resource at index ${index}`
                     );
                 }
 
-                if (
-                    !targetOperation
-                ) {
+                if (!targetOperation) {
                     throw new Error(
-                        `Fanout target ${index} requires an operation`
+                        `Fanout target requires an operation at index ${index}`
                     );
                 }
 
                 const targetResult =
                     await executeResourceAction(
-
                         targetResource,
-
                         targetOperation,
-
                         targetConfig,
-
-                        context
+                        fanoutContext
                     );
 
                 assertSuccessfulResult(
@@ -1871,28 +2169,37 @@ async function executeResourceAction(
                 );
 
                 results.push({
-
+                    index,
+                    item:
+                        fanoutItem,
                     resource:
                         targetResource,
-
                     operation:
                         targetOperation,
-
                     result:
                         targetResult
                 });
             }
 
             result = {
-
                 success: true,
-
+                source: {
+                    resource:
+                        sourceResource,
+                    operation:
+                        sourceOperation,
+                    count:
+                        records.length
+                },
+                count:
+                    results.length,
                 data:
                     results
             };
 
             break;
         }
+        
 
 
         // ========================================================
