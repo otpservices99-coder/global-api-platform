@@ -1,352 +1,157 @@
+const mongoose = require("mongoose");
+
 const Withdrawal = require("../../models/Withdrawal");
 const Wallet = require("../../models/Wallet");
 const Transaction = require("../../models/Transaction");
 
 module.exports = {
-
     name: "withdrawal.request",
 
     execute: async (ctx) => {
-
-        const projectId =
-            ctx.projectId ||
-            ctx.project?._id ||
-            ctx.event?.project;
+        const projectId = ctx?.projectId || null;
 
         const userId =
-            ctx.userId ||
-            ctx.data?.user ||
-            ctx.event?.userId;
+            ctx?.data?.user ||
+            ctx?.data?.userId ||
+            ctx?.userId ||
+            ctx?.event?.entityId ||
+            null;
 
-        const data =
-            ctx.data || {};
+        const amount = Number(ctx?.data?.amount);
 
-        /*
-        |--------------------------------------------------------------------------
-        | Validate project
-        |--------------------------------------------------------------------------
-        */
+        const method =
+            typeof ctx?.data?.method === "string"
+                ? ctx.data.method.trim()
+                : "";
+
+        const details = ctx?.data?.details;
 
         if (!projectId) {
-
-            return {
-                success: false,
-                message: "Project ID is required"
-            };
-
+            throw new Error("Project ID is required");
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Validate user
-        |--------------------------------------------------------------------------
-        */
 
         if (!userId) {
-
-            return {
-                success: false,
-                message: "User ID is required"
-            };
-
+            throw new Error("User ID is required");
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Read request data
-        |--------------------------------------------------------------------------
-        */
-
-        const {
-            amount,
-            method,
-            details
-        } = data;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Validate amount
-        |--------------------------------------------------------------------------
-        */
-
-        const value = Number(amount);
-
-        if (
-            !Number.isFinite(value) ||
-            value <= 0
-        ) {
-
-            return {
-                success: false,
-                message: "Invalid withdrawal amount"
-            };
-
+        if (!Number.isFinite(amount) || amount <= 0) {
+            throw new Error("A positive withdrawal amount is required");
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Validate withdrawal method
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-            !method ||
-            typeof method !== "string"
-        ) {
-
-            return {
-                success: false,
-                message: "Withdrawal method is required"
-            };
-
+        if (!method) {
+            throw new Error("Withdrawal method is required");
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Validate account details
-        |--------------------------------------------------------------------------
-        */
 
         if (
             !details ||
             typeof details !== "object" ||
             Array.isArray(details)
         ) {
-
-            return {
-                success: false,
-                message: "Withdrawal details are required"
-            };
-
+            throw new Error("Withdrawal details are required");
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Find wallet
-        |--------------------------------------------------------------------------
-        */
-
-        const wallet =
-            await Wallet.findOne({
-
-                project: projectId,
-
-                user: userId
-
-            });
-
-        if (!wallet) {
-
-            return {
-                success: false,
-                message: "Wallet not found"
-            };
-
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Check available balance
-        |--------------------------------------------------------------------------
-        */
-
-        if (wallet.balance < value) {
-
-            return {
-                success: false,
-                message: "Insufficient balance"
-            };
-
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Reserve balance
-        |--------------------------------------------------------------------------
-        |
-        | Available balance decreases.
-        |
-        | Pending balance increases.
-        |
-        */
-
-        wallet.balance -= value;
-
-        wallet.pendingBalance += value;
-
-        await wallet.save();
-
-        let withdrawal = null;
-
-        let transaction = null;
+        const session = await mongoose.startSession();
 
         try {
+            let result = null;
 
-            /*
-            |--------------------------------------------------------------------------
-            | Create withdrawal
-            |--------------------------------------------------------------------------
-            */
-
-            withdrawal =
-                await Withdrawal.create({
-
-                    project: projectId,
-
-                    user: userId,
-
-                    amount: value,
-
-                    method:
-                        method.trim(),
-
-                    account: details,
-
-                    status: "pending"
-
-                });
-
-            if (
-                !withdrawal ||
-                !withdrawal._id
-            ) {
-
-                throw new Error(
-                    "Withdrawal could not be created"
+            await session.withTransaction(async () => {
+                /*
+                 * Atomically reserve available wallet funds.
+                 *
+                 * balance decreases.
+                 * pendingBalance increases.
+                 *
+                 * The balance >= amount condition prevents
+                 * overdrawing the wallet.
+                 */
+                const wallet = await Wallet.findOneAndUpdate(
+                    {
+                        project: projectId,
+                        user: userId,
+                        balance: { $gte: amount }
+                    },
+                    {
+                        $inc: {
+                            balance: -amount,
+                            pendingBalance: amount
+                        }
+                    },
+                    {
+                        new: true,
+                        session
+                    }
                 );
 
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Create withdrawal transaction
-            |--------------------------------------------------------------------------
-            */
-
-            transaction =
-                await Transaction.create({
-
-                    project: projectId,
-
-                    user: userId,
-
-                    withdrawal:
-                        withdrawal._id,
-
-                    type:
-                        "withdrawal_request",
-
-                    amount: value,
-
-                    description:
-                        "Withdrawal request",
-
-                    status:
-                        "pending"
-
-                });
-
-            if (
-                !transaction ||
-                !transaction._id
-            ) {
-
-                throw new Error(
-                    "Withdrawal transaction could not be created"
-                );
-
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Verify relationship
-            |--------------------------------------------------------------------------
-            */
-
-            if (
-                !transaction.withdrawal ||
-                transaction.withdrawal.toString() !==
-                withdrawal._id.toString()
-            ) {
-
-                throw new Error(
-                    "Withdrawal transaction relationship could not be established"
-                );
-
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Success
-            |--------------------------------------------------------------------------
-            */
-
-            return {
-
-                success: true,
-
-                message:
-                    "Withdrawal request submitted",
-
-                data: {
-
-                    withdrawal,
-
-                    transaction
-
-                }
-
-            };
-
-        } catch (error) {
-
-            /*
-            |--------------------------------------------------------------------------
-            | Roll back wallet reservation
-            |--------------------------------------------------------------------------
-            */
-
-            wallet.balance += value;
-
-            wallet.pendingBalance -= value;
-
-            await wallet.save();
-
-            /*
-            |--------------------------------------------------------------------------
-            | Remove orphaned withdrawal
-            |--------------------------------------------------------------------------
-            */
-
-            if (
-                withdrawal &&
-                withdrawal._id
-            ) {
-
-                try {
-
-                    await Withdrawal.deleteOne({
-
-                        _id:
-                            withdrawal._id
-
-                    });
-
-                } catch (cleanupError) {
-
-                    console.error(
-                        "Withdrawal cleanup error:",
-                        cleanupError
+                if (!wallet) {
+                    throw new Error(
+                        "Insufficient wallet balance or wallet not found"
                     );
-
                 }
 
-            }
+                /*
+                 * Create the pending withdrawal.
+                 */
+                const withdrawalDocs = await Withdrawal.create(
+                    [
+                        {
+                            project: projectId,
+                            user: userId,
+                            amount,
+                            method,
+                            account: details,
+                            status: "pending"
+                        }
+                    ],
+                    { session }
+                );
 
-            throw error;
+                const withdrawal = withdrawalDocs[0];
 
+                if (!withdrawal?._id) {
+                    throw new Error(
+                        "Withdrawal could not be created"
+                    );
+                }
+
+                /*
+                 * Create the matching pending transaction.
+                 */
+                const transactionDocs = await Transaction.create(
+                    [
+                        {
+                            project: projectId,
+                            user: userId,
+                            withdrawal: withdrawal._id,
+                            type: "withdrawal_request",
+                            amount,
+                            description: "Withdrawal request",
+                            status: "pending"
+                        }
+                    ],
+                    { session }
+                );
+
+                const transaction = transactionDocs[0];
+
+                if (!transaction?._id) {
+                    throw new Error(
+                        "Withdrawal transaction could not be created"
+                    );
+                }
+
+                result = {
+                    success: true,
+                    withdrawal,
+                    transaction,
+                    wallet
+                };
+            });
+
+            return result;
+
+        } finally {
+            await session.endSession();
         }
-
     }
-
 };
