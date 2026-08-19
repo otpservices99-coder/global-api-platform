@@ -1,4 +1,6 @@
-const platform = require("../../services/platformService");
+const platform =
+    require("../../services/platformService");
+
 
 module.exports = {
 
@@ -7,26 +9,22 @@ module.exports = {
     execute: async (ctx) => {
 
         const userId =
-            ctx.userId ||
-            ctx.data?.user ||
-            ctx.data?.userId ||
-            ctx.event?.entityId;
+            ctx?.userId ||
+            ctx?.data?.user ||
+            ctx?.data?.userId ||
+            ctx?.event?.entityId;
 
         if (!userId) {
 
             return {
-
                 success: false,
-
                 message:
                     "User ID missing for wallet.debit"
-
             };
-
         }
 
         const amount =
-            Number(ctx.data?.amount);
+            Number(ctx?.data?.amount);
 
         if (
             !Number.isFinite(amount) ||
@@ -34,38 +32,43 @@ module.exports = {
         ) {
 
             return {
-
                 success: false,
-
                 message:
                     "A positive amount is required for wallet.debit"
-
             };
-
         }
 
-        const wallet =
-            await platform.removeBalance(
+        if (!ctx?.projectId) {
 
-                ctx.projectId,
+            return {
+                success: false,
+                message:
+                    "Project ID is required for wallet.debit"
+            };
+        }
 
-                userId,
+        try {
 
-                amount,
+            const wallet =
+                await platform.removeBalance(
+                    ctx.projectId,
+                    userId,
+                    amount,
+                    ctx?.data?.description ||
+                    "Wallet Debit"
+                );
 
-                ctx.data?.description ||
-                "Wallet Debit"
+            return {
+                success: true,
+                wallet
+            };
 
-            );
+        } catch (error) {
 
-        return {
-
-            success: true,
-
-            wallet
-
-        };
-
+            return {
+                success: false,
+                message: error.message
+            };
+        }
     }
-
 };

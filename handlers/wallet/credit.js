@@ -1,58 +1,73 @@
-const platform = require("../../services/platformService");
+const platform =
+    require("../../services/platformService");
 
 
 module.exports = {
 
     name: "wallet.credit",
 
-
     execute: async (ctx) => {
 
-
         const userId =
-            ctx.userId ||
-            ctx.data.user ||
-            ctx.event?.entityId;
-
+            ctx?.userId ||
+            ctx?.data?.user ||
+            ctx?.event?.entityId;
 
         if (!userId) {
 
             return {
-
-                success:false,
-
-                message:"User ID missing for wallet.credit"
-
+                success: false,
+                message:
+                    "User ID missing for wallet.credit"
             };
-
         }
 
+        const amount =
+            Number(ctx?.data?.amount);
 
+        if (
+            !Number.isFinite(amount) ||
+            amount <= 0
+        ) {
 
-        const wallet =
-            await platform.addBalance(
+            return {
+                success: false,
+                message:
+                    "A positive amount is required for wallet.credit"
+            };
+        }
 
-                ctx.projectId,
+        if (!ctx?.projectId) {
 
-                userId,
+            return {
+                success: false,
+                message:
+                    "Project ID is required for wallet.credit"
+            };
+        }
 
-                Number(ctx.data.amount),
+        try {
 
-                ctx.data.description || "Wallet Credit"
+            const wallet =
+                await platform.addBalance(
+                    ctx.projectId,
+                    userId,
+                    amount,
+                    ctx?.data?.description ||
+                    "Wallet Credit"
+                );
 
-            );
+            return {
+                success: true,
+                wallet
+            };
 
+        } catch (error) {
 
-
-        return {
-
-            success:true,
-
-            wallet
-
-        };
-
-
+            return {
+                success: false,
+                message: error.message
+            };
+        }
     }
-
 };

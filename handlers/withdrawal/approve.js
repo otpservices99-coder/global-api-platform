@@ -1,51 +1,21 @@
 const mongoose = require("mongoose");
 
-const Withdrawal = require("../../models/Withdrawal");
-const Transaction = require("../../models/Transaction");
-const Wallet = require("../../models/Wallet");
+const Withdrawal =
+    require("../../models/Withdrawal");
 
-const audit = require("../../services/auditService");
+const Transaction =
+    require("../../models/Transaction");
 
+const Wallet =
+    require("../../models/Wallet");
 
-/*
- * ============================================================
- * WITHDRAWAL APPROVAL HANDLER
- * ============================================================
- *
- * Global / project-aware action handler.
- *
- * This handler does NOT contain:
- * - hard-coded project IDs
- * - hard-coded user IDs
- * - hard-coded wallet IDs
- * - hard-coded withdrawal amounts
- * - Earnify-specific logic
- *
- * Everything is resolved dynamically from the action context
- * and the withdrawal document.
- *
- * Flow:
- *
- *   Admin route
- *       ↓
- *   Action Engine
- *       ↓
- *   withdrawal.approve
- *       ↓
- *   MongoDB transaction
- *       ├── update wallet
- *       ├── update withdrawal
- *       └── update/create transaction
- *       ↓
- *   audit
- *
- * ============================================================
- */
+const audit =
+    require("../../services/auditService");
+
 
 module.exports = {
 
     name: "withdrawal.approve",
-
 
     execute: async (ctx) => {
 
@@ -58,240 +28,185 @@ module.exports = {
         const actorId =
             ctx?.actorId || null;
 
-
-        /*
-         * ----------------------------------------------------
-         * Validate action context
-         * ----------------------------------------------------
-         */
-
         if (!projectId) {
-
             throw new Error(
                 "Project ID is required"
             );
-
         }
 
-
         if (!withdrawalId) {
-
             throw new Error(
                 "Withdrawal ID is required"
             );
-
         }
-
-
-        /*
-         * ----------------------------------------------------
-         * Start MongoDB transaction
-         * ----------------------------------------------------
-         */
 
         const session =
             await mongoose.startSession();
 
-
         try {
 
             let approvedWithdrawal = null;
-
 
             await session.withTransaction(
                 async () => {
 
                     /*
                      * ------------------------------------------------
-                     * Find the withdrawal.
-                     *
-                     * Project ownership is ALWAYS enforced.
+                     * FIND WITHDRAWAL
                      * ------------------------------------------------
                      */
-
                     const withdrawal =
                         await Withdrawal.findOne({
-
                             _id: withdrawalId,
-
                             project: projectId
-
                         }).session(session);
 
-
                     if (!withdrawal) {
-
                         throw new Error(
                             "Withdrawal not found"
                         );
-
                     }
-
 
                     /*
                      * ------------------------------------------------
-                     * Only pending withdrawals can be approved.
+                     * ONLY PENDING
                      * ------------------------------------------------
                      */
-
                     if (
-                        withdrawal.status !== "pending"
+                        withdrawal.status !==
+                        "pending"
                     ) {
-
                         throw new Error(
                             "Withdrawal already processed"
                         );
-
                     }
-
 
                     /*
                      * ------------------------------------------------
-                     * Find the wallet belonging to the same
-                     * project AND the withdrawal owner.
+                     * VALIDATE AMOUNT
                      * ------------------------------------------------
                      */
+                    const amount =
+                        Number(withdrawal.amount);
 
+                    if (
+                        !Number.isFinite(amount) ||
+                        amount <= 0
+                    ) {
+                        throw new Error(
+                            "Invalid withdrawal amount"
+                        );
+                    }
+
+                    /*
+                     * ------------------------------------------------
+                     * FIND WALLET
+                     * ------------------------------------------------
+                     *
+                     * Do NOT use ResourceData.
+                     *
+                     * This is the real Wallet ledger.
+                     */
                     const wallet =
                         await Wallet.findOne({
-
                             project: projectId,
-
                             user: withdrawal.user
-
                         }).session(session);
 
-
                     if (!wallet) {
-
                         throw new Error(
                             "Wallet not found"
                         );
-
                     }
-
 
                     /*
                      * ------------------------------------------------
-                     * The requested amount must still be reserved
-                     * in pendingBalance.
+                     * VERIFY RESERVED MONEY
                      * ------------------------------------------------
                      */
-
                     if (
-                        Number(wallet.pendingBalance) <
-                        Number(withdrawal.amount)
+                        Number(wallet.pendingBalance || 0) <
+                        amount
                     ) {
-
                         throw new Error(
                             "Insufficient pending balance"
                         );
-
                     }
-
 
                     /*
                      * ------------------------------------------------
-                     * Finalize wallet reservation.
-                     *
-                     * balance:
-                     * already decreased during withdrawal request.
-                     *
-                     * pendingBalance:
-                     * released from reservation.
-                     *
-                     * totalWithdrawn:
-                     * permanently increases.
+                     * COMPLETE WALLET RESERVATION
                      * ------------------------------------------------
+                     *
+                     * Withdrawal request already moved:
+                     *
+                     * balance -> pendingBalance
+                     *
+                     * Approval now:
+                     *
+                     * pendingBalance -= amount
+                     * totalWithdrawn += amount
+                     *
+                     * Balance is NOT added back.
                      */
-
                     wallet.pendingBalance =
-                        Number(wallet.pendingBalance) -
-                        Number(withdrawal.amount);
-
+                        Number(wallet.pendingBalance || 0) -
+                        amount;
 
                     wallet.totalWithdrawn =
-                        Number(wallet.totalWithdrawn) +
-                        Number(withdrawal.amount);
-
+                        Number(wallet.totalWithdrawn || 0) +
+                        amount;
 
                     await wallet.save({
                         session
                     });
 
-
                     /*
                      * ------------------------------------------------
-                     * Mark withdrawal as approved.
-                     *
-                     * These fields are explicitly written here so
-                     * an approved withdrawal can NEVER intentionally
-                     * remain with:
-                     *
-                     * processedAt: null
-                     * processedBy: null
+                     * MARK WITHDRAWAL APPROVED
                      * ------------------------------------------------
                      */
-
                     withdrawal.status =
                         "approved";
-
 
                     withdrawal.processedAt =
                         new Date();
 
-
                     withdrawal.processedBy =
                         actorId;
-
 
                     await withdrawal.save({
                         session
                     });
 
-
                     /*
                      * ------------------------------------------------
-                     * Find the original withdrawal request
-                     * transaction.
-                     *
-                     * Project + user + withdrawal relationship are
-                     * all checked.
+                     * TRANSACTION
                      * ------------------------------------------------
                      */
-
                     const transaction =
                         await Transaction.findOne({
-
                             project: projectId,
-
                             user: withdrawal.user,
-
-                            withdrawal: withdrawal._id,
-
-                            type: "withdrawal_request"
-
+                            withdrawal:
+                                withdrawal._id,
+                            type:
+                                "withdrawal_request"
                         }).session(session);
 
-
                     if (transaction) {
-
-                        /*
-                         * Convert the original request transaction
-                         * into the completed withdrawal transaction.
-                         */
 
                         transaction.type =
                             "withdrawal";
 
-
                         transaction.status =
                             "completed";
 
+                        transaction.amount =
+                            amount;
 
                         transaction.description =
                             "Withdrawal approved";
-
 
                         await transaction.save({
                             session
@@ -299,22 +214,14 @@ module.exports = {
 
                     } else {
 
-                        /*
-                         * ------------------------------------------------
-                         * Compatibility fallback.
-                         *
-                         * Older withdrawals may not have a linked
-                         * withdrawal_request transaction.
-                         * ------------------------------------------------
-                         */
-
                         await Transaction.create(
                             [
                                 {
+                                    project:
+                                        projectId,
 
-                                    project: projectId,
-
-                                    user: withdrawal.user,
+                                    user:
+                                        withdrawal.user,
 
                                     withdrawal:
                                         withdrawal._id,
@@ -322,53 +229,41 @@ module.exports = {
                                     type:
                                         "withdrawal",
 
-                                    amount:
-                                        withdrawal.amount,
+                                    amount,
 
                                     description:
                                         "Withdrawal approved",
 
                                     status:
                                         "completed"
-
                                 }
                             ],
                             {
                                 session
                             }
                         );
-
                     }
-
-
-                    /*
-                     * Keep a reference to the transactionally
-                     * approved withdrawal for the return value.
-                     */
 
                     approvedWithdrawal =
                         withdrawal;
-
                 }
             );
 
-
             /*
-             * ----------------------------------------------------
-             * Audit AFTER successful transaction.
-             *
-             * If the financial operation failed, we do not write
-             * a successful approval audit entry.
-             * ----------------------------------------------------
+             * --------------------------------------------------------
+             * AUDIT
+             * --------------------------------------------------------
              */
-
             await audit.log({
 
-                project: projectId,
+                project:
+                    projectId,
 
-                actor: actorId,
+                actor:
+                    actorId,
 
-                user: approvedWithdrawal.user,
+                user:
+                    approvedWithdrawal.user,
 
                 action:
                     "withdrawal.approved",
@@ -383,20 +278,11 @@ module.exports = {
 
                     amount:
                         approvedWithdrawal.amount
-
                 },
 
                 req:
                     ctx?.req
-
             });
-
-
-            /*
-             * ----------------------------------------------------
-             * Return standardized action result.
-             * ----------------------------------------------------
-             */
 
             return {
 
@@ -404,20 +290,11 @@ module.exports = {
 
                 withdrawal:
                     approvedWithdrawal
-
             };
-
 
         } finally {
 
-            /*
-             * Always close the MongoDB session.
-             */
-
             await session.endSession();
-
         }
-
     }
-
 };
