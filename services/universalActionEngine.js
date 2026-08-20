@@ -1148,12 +1148,34 @@ async function resolveOperation({
         return null;
     }
 
+    // ------------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Broadcast definitions contain fanout-time templates such as:
+    //
+    //     {{item._id}}
+    //
+    // These MUST NOT be resolved here because the broadcast item does
+    // not exist yet. They are resolved inside the broadcast loop after
+    // source records have been loaded.
+    //
+    // Resolving a broadcast definition here would turn:
+    //
+    //     user: "{{item._id}}"
+    //
+    // into an empty/missing value before the loop starts.
+    // ------------------------------------------------------------
+
     const resolvedDefinition =
         definition === true
             ? {}
-            : resolveObject(
-                definition,
-                context
+            : (
+                requestedOperation === "broadcast"
+                    ? definition
+                    : resolveObject(
+                        definition,
+                        context
+                    )
             );
 
     const resolvedConfig =
