@@ -2891,22 +2891,81 @@ const SENSITIVE_FIELDS = new Set([
 ]);
 
 
+
 function sanitizeActionResult(
     value
 ) {
 
     if (
-        value === null ||
-        value === undefined
+        value === undefined ||
+        value === null
     ) {
         return value;
     }
 
+    // ------------------------------------------------------------
+    // MongoDB / Mongoose ObjectId
+    // ------------------------------------------------------------
+    //
+    // ObjectIds must become strings in API responses.
+    //
+    // Do this BEFORE checking generic objects because ObjectId
+    // exposes enumerable internals such as:
+    //
+    // { buffer: { 0: ..., 1: ..., ... } }
+    //
+    // which must never leak into the API response.
+    // ------------------------------------------------------------
+
+    if (
+        typeof value === "object" &&
+        typeof value.toHexString === "function"
+    ) {
+        try {
+            return value.toHexString();
+        } catch (error) {
+            // Continue with normal object handling.
+        }
+    }
+
+    if (
+        typeof value === "object" &&
+        value._bsontype === "ObjectId"
+    ) {
+        try {
+            return String(value);
+        } catch (error) {
+            // Continue with normal object handling.
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Date
+    // ------------------------------------------------------------
+
+    if (
+        value instanceof Date
+    ) {
+        return value.toISOString();
+    }
+
+    // ------------------------------------------------------------
+    // Primitive
+    // ------------------------------------------------------------
+
+    if (
+        typeof value !== "object"
+    ) {
+        return value;
+    }
+
+    // ------------------------------------------------------------
+    // Arrays
+    // ------------------------------------------------------------
 
     if (
         Array.isArray(value)
     ) {
-
         return value.map(
             item =>
                 sanitizeActionResult(
@@ -2915,15 +2974,10 @@ function sanitizeActionResult(
         );
     }
 
+    // ------------------------------------------------------------
+    // Mongoose documents
+    // ------------------------------------------------------------
 
-    if (
-        typeof value !== "object"
-    ) {
-        return value;
-    }
-
-
-    // Mongoose documents.
     if (
         typeof value.toObject === "function"
     ) {
@@ -2931,16 +2985,20 @@ function sanitizeActionResult(
         try {
 
             return sanitizeActionResult(
-                value.toObject()
+                value.toObject({
+                    getters: false,
+                    virtuals: false
+                })
             );
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
             // Continue with enumerable properties.
         }
     }
 
+    // ------------------------------------------------------------
+    // Generic object
+    // ------------------------------------------------------------
 
     const output = {};
 
