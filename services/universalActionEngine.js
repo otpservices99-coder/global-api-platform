@@ -524,13 +524,43 @@ function mergeObjects(
                 of Object.entries(object)
             ) {
 
+                // ----------------------------------------------------
+                // IMPORTANT:
+                // Preserve MongoDB / Mongoose ObjectIds.
+                //
+                // ObjectId is an object, but it must NOT be recursively
+                // merged because doing so converts it into:
+                //
+                // { buffer: { ... } }
+                //
+                // which Mongoose cannot cast back to ObjectId.
+                // ----------------------------------------------------
+
                 if (
                     value &&
                     typeof value === "object" &&
-                    !Array.isArray(value) &&
-                    output[key] &&
-                    typeof output[key] === "object" &&
-                    !Array.isArray(output[key])
+                    typeof value.toHexString === "function"
+                ) {
+                    output[key] = value;
+                    continue;
+                }
+
+                if (
+                    value &&
+                    typeof value === "object" &&
+                    value._bsontype === "ObjectId"
+                ) {
+                    output[key] = value;
+                    continue;
+                }
+
+                // ----------------------------------------------------
+                // Recursive plain-object merge only.
+                // ----------------------------------------------------
+
+                if (
+                    isPlainObject(value) &&
+                    isPlainObject(output[key])
                 ) {
 
                     output[key] =
@@ -551,7 +581,6 @@ function mergeObjects(
         {}
     );
 }
-
 
 // ============================================================================
 // PLAIN OBJECT
@@ -1447,15 +1476,45 @@ async function executeResourceAction(
                     ...targetConfig,
                     data: targetData
                 };
+                console.log(
+    "BROADCAST TARGET DEBUG:",
+    JSON.stringify({
+        itemId:
+            item?._id?.toString?.() ||
+            item?.id?.toString?.() ||
+            null,
+
+        resolvedTargetData:
+            targetData,
+
+        resolvedUser:
+            targetData?.user,
+
+        resolvedProject:
+            targetData?.project
+    }, null, 2)
+);
 
                 const targetResult =
-                    await executeResourceAction(
-                        target.resource,
-                        target.operation,
-                        finalTargetConfig,
-                        itemContext
-                    );
+    await executeResourceAction(
+        resolveValue(
+            target.resource,
+            itemContext
+        ),
+        resolveValue(
+            target.operation,
+            itemContext
+        ),
+        finalTargetConfig,
+        {
+            ...itemContext,
 
+            // Explicitly preserve the current broadcast item.
+            item,
+            fanoutItem: item,
+            currentItem: item
+        }
+    );
                 assertSuccessfulResult(
                     targetResult,
                     `broadcast[${index}] ${target.resource}.${target.operation}`
