@@ -5,6 +5,90 @@ const walletService = require("../services/walletService");
 
 
 // ============================================================
+// SUPER ADMIN DETECTION
+// ============================================================
+
+async function isSuperAdminRequest(req) {
+
+    try {
+
+        const authorization =
+            req.headers.authorization || "";
+
+        if (
+            typeof authorization !== "string" ||
+            !authorization.startsWith("Bearer ")
+        ) {
+            return false;
+        }
+
+        const token =
+            authorization.substring(7).trim();
+
+        if (!token) {
+            return false;
+        }
+
+        const decoded =
+            jwt.verify(
+                token,
+                process.env.JWT_SECRET
+            );
+
+        if (
+            decoded.platformRole !== "super_admin"
+        ) {
+            return false;
+        }
+
+        const user = await User.findById(
+            decoded.id
+        ).select(
+            "_id platformRole status project"
+        );
+
+        if (!user) {
+            return false;
+        }
+
+        if (
+            user.platformRole !== "super_admin"
+        ) {
+            return false;
+        }
+
+        if (
+            user.status &&
+            user.status !== "active"
+        ) {
+            return false;
+        }
+
+        /*
+         * The API-key middleware remains authoritative for
+         * project selection.
+         *
+         * We therefore do not replace req.projectId here.
+         */
+
+        return true;
+
+    } catch (error) {
+
+        /*
+         * Invalid/expired/missing admin JWT simply means:
+         *
+         * "This is not an authenticated super-admin request."
+         *
+         * It must NOT break normal registration.
+         */
+
+        return false;
+    }
+}
+
+
+// ============================================================
 // REGISTER USER
 // ============================================================
 
@@ -13,15 +97,21 @@ const registerUser = async (req, res) => {
     try {
 
         /*
-         * Project authentication has already been performed
-         * by middleware/project.js.
+         * Project authentication has already happened inside:
+         *
+         *     middleware/project.js
+         *
+         * req.projectId is therefore the authoritative project.
          */
-        const project = req.project || null;
+
+        const project =
+            req.project || null;
 
         const projectId =
             req.projectId ||
             project?._id ||
             null;
+
 
         if (!projectId) {
 
@@ -32,6 +122,10 @@ const registerUser = async (req, res) => {
         }
 
 
+        // ====================================================
+        // INPUT
+        // ====================================================
+
         const {
             username,
             email,
@@ -41,10 +135,14 @@ const registerUser = async (req, res) => {
 
 
         // ====================================================
-        // VALIDATE INPUT
+        // VALIDATE BASIC INPUT
         // ====================================================
 
-        if (!username || !email || !password) {
+        if (
+            !username ||
+            !email ||
+            !password
+        ) {
 
             return res.status(400).json({
                 success: false,
@@ -54,24 +152,40 @@ const registerUser = async (req, res) => {
         }
 
 
-        /*
-         * deviceId is required for normal account registration.
-         *
-         * This allows the platform to enforce one account per
-         * device while keeping the API explicit.
-         */
-        if (!deviceId || typeof deviceId !== "string") {
-
-            return res.status(400).json({
-                success: false,
-                message: "deviceId is required"
-            });
-        }
+        // ====================================================
+        // NORMALIZE DEVICE ID
+        // ====================================================
 
         const normalizedDeviceId =
-            deviceId.trim();
+            typeof deviceId === "string"
+                ? deviceId.trim()
+                : "";
 
-        if (!normalizedDeviceId) {
+
+        // ====================================================
+        // DETERMINE SUPER ADMIN STATUS
+        // ====================================================
+
+        const superAdmin =
+            await isSuperAdminRequest(req);
+
+
+        // ====================================================
+        // DEVICE VALIDATION
+        // ====================================================
+
+        /*
+         * Normal users MUST provide a deviceId.
+         *
+         * Super admins are allowed to create accounts without
+         * a deviceId because they are not subject to the normal
+         * device restriction.
+         */
+
+        if (
+            !superAdmin &&
+            !normalizedDeviceId
+        ) {
 
             return res.status(400).json({
                 success: false,
@@ -81,7 +195,7 @@ const registerUser = async (req, res) => {
 
 
         // ====================================================
-        // CHECK EXISTING USERNAME / EMAIL
+        // CHECK USERNAME / EMAIL
         // ====================================================
 
         const normalizedEmail =
@@ -97,7 +211,6 @@ const registerUser = async (req, res) => {
         const existingUser =
             await User.findOne({
                 project: projectId,
-
                 $or: [
                     {
                         email:
@@ -122,39 +235,37 @@ const registerUser = async (req, res) => {
 
 
         // ====================================================
-        // DEVICE ACCOUNT PROTECTION
-        // ====================================================
-        //
-        // IMPORTANT:
-        //
-        // A super_admin is allowed to create multiple accounts
-        // from the same device.
-        //
-        // Normal users are limited to one account per device
-        // inside the same project.
-        //
-        // This is checked at registration time rather than using
-        // a MongoDB unique index because administrators must be
-        // able to share the same deviceId.
+        // DEVICE DUPLICATE CHECK
         // ====================================================
 
-        const existingDeviceUser =
-            await User.findOne({
-                project: projectId,
-                deviceId: normalizedDeviceId,
-                platformRole: {
-                    $ne: "super_admin"
-                }
-            });
+        /*
+         * Only normal registration is restricted.
+         *
+         * A super admin may deliberately create multiple
+         * accounts from the same device.
+         */
+
+        if (
+            !superAdmin &&
+            normalizedDeviceId
+        ) {
+
+            const existingDeviceUser =
+                await User.findOne({
+                    project: projectId,
+                    deviceId:
+                        normalizedDeviceId
+                }).select("_id username email");
 
 
-        if (existingDeviceUser) {
+            if (existingDeviceUser) {
 
-            return res.status(409).json({
-                success: false,
-                message:
-                    "An account already exists on this device"
-            });
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "An account already exists on this device"
+                });
+            }
         }
 
 
@@ -186,23 +297,31 @@ const registerUser = async (req, res) => {
                 password:
                     hashedPassword,
 
-                deviceId:
-                    normalizedDeviceId,
+                /*
+                 * Preserve the device for normal users.
+                 *
+                 * Super-admin-created accounts may also receive
+                 * a deviceId if one was supplied.
+                 */
 
-                platformRole:
-                    "user"
+                deviceId:
+                    normalizedDeviceId ||
+                    null
             });
 
 
         // ====================================================
-        // ENSURE USER WALLET
+        // ENSURE WALLET
         // ====================================================
-        //
-        // Keep this explicitly in registration.
-        //
-        // The User model also has its existing post-save wallet
-        // protection, so this remains safe and idempotent.
-        // ====================================================
+
+        /*
+         * Keep the explicit wallet service call.
+         *
+         * This preserves the existing registration behavior
+         * and remains compatible with wallet.credit targeting:
+         *
+         *     data.user
+         */
 
         await walletService.ensureWallet(
             projectId,
@@ -222,15 +341,20 @@ const registerUser = async (req, res) => {
                 "Account created successfully",
 
             user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
+                id:
+                    user._id,
+
+                username:
+                    user.username,
+
+                email:
+                    user.email,
+
                 project:
                     project?.name ||
                     projectId
             }
         });
-
 
     } catch (error) {
 
@@ -238,6 +362,16 @@ const registerUser = async (req, res) => {
             "REGISTER USER ERROR:",
             error
         );
+
+
+        /*
+         * Handle a race condition where two registrations with
+         * the same device arrive at almost exactly the same time.
+         *
+         * Because deviceId is intentionally not a unique index,
+         * the normal lookup remains authoritative while avoiding
+         * database-level blocking of super-admin accounts.
+         */
 
         return res.status(500).json({
             success: false,
@@ -259,11 +393,10 @@ const loginUser = async (req, res) => {
          * API-key authentication has already happened in:
          *
          *     middleware/project.js
-         *
-         * req.projectId is the authoritative project.
          */
 
-        const project = req.project || null;
+        const project =
+            req.project || null;
 
         const projectId =
             req.projectId ||
@@ -291,7 +424,10 @@ const loginUser = async (req, res) => {
         // VALIDATE INPUT
         // ====================================================
 
-        if (!email || !password) {
+        if (
+            !email ||
+            !password
+        ) {
 
             return res.status(400).json({
                 success: false,
@@ -302,7 +438,7 @@ const loginUser = async (req, res) => {
 
 
         // ====================================================
-        // FIND USER INSIDE TARGET PROJECT
+        // FIND USER
         // ====================================================
 
         const user =
@@ -312,7 +448,8 @@ const loginUser = async (req, res) => {
                         .trim()
                         .toLowerCase(),
 
-                project: projectId
+                project:
+                    projectId
             });
 
 
@@ -327,7 +464,7 @@ const loginUser = async (req, res) => {
 
 
         // ====================================================
-        // COMPARE PASSWORD
+        // PASSWORD
         // ====================================================
 
         const validPassword =
@@ -348,25 +485,32 @@ const loginUser = async (req, res) => {
 
 
         // ====================================================
-        // GENERATE JWT
+        // JWT
         // ====================================================
-        //
-        // No expiration is intentionally configured.
-        //
-        // Existing engine authentication behavior remains
-        // unchanged.
-        // ====================================================
+
+        /*
+         * No expiresIn is supplied intentionally.
+         *
+         * Existing JWT verification remains compatible because
+         * tokens without an exp claim do not expire naturally.
+         */
 
         const token =
             jwt.sign(
                 {
-                    id: user._id,
-                    role: user.role,
+                    id:
+                        user._id,
+
+                    role:
+                        user.role,
+
                     platformRole:
                         user.platformRole,
+
                     project:
                         user.project
                 },
+
                 process.env.JWT_SECRET
             );
 
@@ -395,17 +539,26 @@ const loginUser = async (req, res) => {
             token,
 
             user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                role: user.role,
+
+                id:
+                    user._id,
+
+                username:
+                    user.username,
+
+                email:
+                    user.email,
+
+                role:
+                    user.role,
+
                 platformRole:
                     user.platformRole,
+
                 project:
                     user.project
             }
         });
-
 
     } catch (error) {
 
@@ -416,7 +569,8 @@ const loginUser = async (req, res) => {
 
         return res.status(500).json({
             success: false,
-            message: error.message
+            message:
+                error.message
         });
     }
 };

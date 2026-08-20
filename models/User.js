@@ -38,29 +38,6 @@ const userSchema = new mongoose.Schema(
             index: true
         },
 
-        /*
-         * Device fingerprint supplied during registration.
-         *
-         * IMPORTANT:
-         * This is intentionally NOT globally unique.
-         *
-         * Registration logic enforces:
-         *
-         *   normal user + same project + same deviceId
-         *       => rejected
-         *
-         *   super_admin + same deviceId
-         *       => allowed
-         *
-         * This preserves support/admin flexibility.
-         */
-        deviceId: {
-            type: String,
-            default: null,
-            trim: true,
-            index: true
-        },
-
         role: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Role",
@@ -75,6 +52,21 @@ const userSchema = new mongoose.Schema(
                 "blocked"
             ],
             default: "active"
+        },
+
+        /*
+         * Device fingerprint supplied by the client.
+         *
+         * This is intentionally NOT unique by itself.
+         *
+         * Multiple accounts may exist on the same device when
+         * the authenticated requester is a super admin.
+         */
+        deviceId: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
         },
 
         profile: {
@@ -100,14 +92,35 @@ const userSchema = new mongoose.Schema(
 
 /*
  * ============================================================
+ * DEVICE INDEX
+ * ============================================================
+ *
+ * Device restriction is enforced by the registration controller:
+ *
+ *     project + deviceId
+ *
+ * We intentionally do NOT create a unique MongoDB index because
+ * super admins must be able to create multiple accounts from
+ * the same device.
+ */
+
+userSchema.index({
+    project: 1,
+    deviceId: 1
+});
+
+
+/*
+ * ============================================================
  * AUTOMATIC WALLET CREATION
  * ============================================================
  *
- * Preserve the existing wallet behavior.
+ * Every normal User.save()/User.create() operation for a
+ * project user automatically ensures the wallet exists.
  *
- * Every normal User.create() / save() operation creates or
- * ensures the corresponding project wallet.
+ * This preserves the existing wallet architecture.
  */
+
 userSchema.post("save", async function(doc) {
 
     try {
@@ -132,6 +145,7 @@ userSchema.post("save", async function(doc) {
                     totalWithdrawn: 0,
 
                     currency: "NGN",
+
                     metadata: {}
                 }
             },
