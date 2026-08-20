@@ -223,10 +223,7 @@ const loginUser = async (req, res) => {
                 platformRole: user.platformRole,
                 project: user.project
             },
-            process.env.JWT_SECRET,
-            {
-                expiresIn: "7d"
-            }
+            process.env.JWT_SECRET
         );
 
         // ====================================================
