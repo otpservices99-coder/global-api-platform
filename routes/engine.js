@@ -14,6 +14,66 @@ const {
 
 const protect = require("../middleware/auth");
 
+/**
+ * @swagger
+ * /api/v1/engine:
+ *   post:
+ *     summary: Execute a global action
+ *     description: |
+ *       Universal Action Engine gateway. Executes an enabled action
+ *       using the project's action definition and configured handler
+ *       or resource operation.
+ *
+ *       The payload is intentionally dynamic so future actions can be
+ *       added without changing this endpoint.
+ *     tags:
+ *       - Universal Action Engine
+ *     security:
+ *       - apiKeyAuth: []
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - action
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 example: wallet.credit
+ *                 description: Name of the enabled action to execute.
+ *               data:
+ *                 type: object
+ *                 additionalProperties: true
+ *                 description: Dynamic action input data.
+ *                 example:
+ *                   user: 6a7d0a8cc8d487879b905f13
+ *                   amount: 25
+ *                   description: Target User Credit
+ *     parameters:
+ *       - in: header
+ *         name: X-API-Key
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Project API key.
+ *     responses:
+ *       200:
+ *         description: Action executed successfully.
+ *       400:
+ *         description: Invalid action or request data.
+ *       401:
+ *         description: Unauthorized.
+ *       403:
+ *         description: Action or API key permission denied.
+ *       404:
+ *         description: Action not found.
+ *       500:
+ *         description: Action execution failed.
+ */
+
 
 // ============================================================
 // GLOBAL ACTION ENGINE

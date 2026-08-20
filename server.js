@@ -198,17 +198,17 @@ app.use(
 // SWAGGER
 // ============================================================
 
-app.use(
-    "/api-docs",
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerSpec)
-);
-
 app.get(
     "/api-docs/swagger.json",
     (req, res) => {
         res.json(swaggerSpec);
     }
+);
+
+app.use(
+    "/api-docs",
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec)
 );
 
 
