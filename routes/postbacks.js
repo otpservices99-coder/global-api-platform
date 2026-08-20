@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const router =
@@ -8,21 +9,56 @@ const {
 } = require("../services/earnService");
 
 
-async function handlePostback(
-    req,
-    res
-) {
+// ============================================================
+// PUBLIC PROVIDER POSTBACK
+// ============================================================
+//
+// GET /api/v1/postbacks/:provider
+// POST /api/v1/postbacks/:provider
+//
+// NO X-API-KEY.
+// NO USER JWT.
+//
+// Authentication is handled by:
+//   ?secret=...
+//   X-Postback-Secret: ...
+//
+// Accepted transaction IDs:
+//   transaction_id
+//   tx
+//   externalTxId
+//   transactionId
+//
+// Accepted session IDs:
+//   sessionId
+//   sub1
+//
+// Accepted completion statuses:
+//   1
+//   ok
+//   success
+//   successful
+//   completed
+//   complete
+//   approved
+//   done
+//   paid
+//
+// ============================================================
+
+async function handlePostback(req, res) {
     try {
         const provider =
             String(
                 req.params.provider || ""
             )
-                .trim()
-                .toLowerCase();
+            .trim()
+            .toLowerCase();
 
         if (!provider) {
             return res.status(400).json({
                 success: false,
+                credited: false,
                 message:
                     "Provider is required"
             });
@@ -30,34 +66,13 @@ async function handlePostback(
 
         const result =
             await processPostback({
-                providerKey:
-                    provider,
+                providerKey: provider,
                 req
             });
 
-        /*
-         * Duplicate callbacks intentionally return 200.
-         *
-         * The provider already told us about this transaction.
-         * We simply acknowledge it without crediting again.
-         */
-        if (result.duplicate) {
-            return res.status(200).json({
-                success: true,
-                duplicate: true,
-                message:
-                    "Postback already processed"
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            credited:
-                result.credited === true,
-            amount:
-                result.amount || 0
-        });
-
+        return res.status(200).json(
+            result
+        );
     } catch (error) {
         console.error(
             "EARN POSTBACK ERROR:",
@@ -68,24 +83,22 @@ async function handlePostback(
             error.statusCode || 500
         ).json({
             success: false,
+            credited: false,
             message:
                 error.message ||
-                "Postback rejected"
+                "Postback processing failed"
         });
     }
 }
-
 
 router.get(
     "/:provider",
     handlePostback
 );
 
-
 router.post(
     "/:provider",
     handlePostback
 );
-
 
 module.exports = router;
