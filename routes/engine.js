@@ -2,423 +2,582 @@ const express = require("express");
 
 const router = express.Router();
 
-const {
-    processActions
-} = require("../services/actionEngine");
-
-const Action = require("../models/Action");
+const project = require("../middleware/project");
+const apiUsage = require("../middleware/apiUsage");
 
 const {
-    hasPermission
-} = require("../services/apiKeyService");
+    executeUniversalAction
+} = require("../services/universalActionEngine");
 
-const protect = require("../middleware/auth");
-
-/**
- * @swagger
- * /api/v1/engine:
- *   post:
- *     summary: Execute a global action
- *     description: |
- *       Universal Action Engine gateway. Executes an enabled action
- *       using the project's action definition and configured handler
- *       or resource operation.
- *
- *       The payload is intentionally dynamic so future actions can be
- *       added without changing this endpoint.
- *     tags:
- *       - Universal Action Engine
- *     security:
- *       - apiKeyAuth: []
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - action
- *             properties:
- *               action:
- *                 type: string
- *                 example: wallet.credit
- *                 description: Name of the enabled action to execute.
- *               data:
- *                 type: object
- *                 additionalProperties: true
- *                 description: Dynamic action input data.
- *                 example:
- *                   user: 6a7d0a8cc8d487879b905f13
- *                   amount: 25
- *                   description: Target User Credit
- *     parameters:
- *       - in: header
- *         name: X-API-Key
- *         required: true
- *         schema:
- *           type: string
- *         description: Project API key.
- *     responses:
- *       200:
- *         description: Action executed successfully.
- *       400:
- *         description: Invalid action or request data.
- *       401:
- *         description: Unauthorized.
- *       403:
- *         description: Action or API key permission denied.
- *       404:
- *         description: Action not found.
- *       500:
- *         description: Action execution failed.
- */
+const {
+    createRequestHash,
+    claim,
+    complete,
+    fail,
+    waitForCompletion,
+    retryFailed
+} = require("../services/idempotencyService");
 
 
-// ============================================================
-// GLOBAL ACTION ENGINE
-// ============================================================
+// ============================================================================
+// IDEMPOTENT ACTIONS
+// ============================================================================
 //
-// POST /api/v1/engine
+// These actions can create financial/state-changing effects.
 //
-// The route is only the gateway.
+// When an Idempotency-Key is supplied, the same key is guaranteed to execute
+// only once per project within the configured TTL.
 //
-// API key
-//   ↓
-// Project
-//   ↓
-// Action definition
-//   ↓
-// Universal Action Engine
-//   ↓
-// Real operation
-//   ↓
-// Verified result
-// ============================================================
+// Requests without an Idempotency-Key continue to behave exactly as before.
+// ============================================================================
+
+const IDEMPOTENT_ACTIONS = new Set([
+    "wallet.credit",
+    "wallet.debit",
+    "reward.grant",
+    "withdrawal.approve",
+    "withdrawal.reject",
+    "withdrawal.request",
+    "user.delete"
+]);
+
+
+// ============================================================================
+// READ-ONLY ACTIONS
+// ============================================================================
+
+const SKIP_IDEMPOTENCY = new Set([
+    "wallet.view",
+    "system.ping",
+    "system.health",
+    "transaction.find"
+]);
+
+
+// ============================================================================
+// PROJECT ID
+// ============================================================================
+
+function getProjectId(req) {
+    return (
+        req.projectId ||
+        req.project?._id ||
+        req.project?.id ||
+        null
+    );
+}
+
+
+// ============================================================================
+// IDEMPOTENCY KEY
+// ============================================================================
+//
+// PRECEDENCE:
+//
+// 1. Idempotency-Key header
+// 2. body.idempotencyKey
+// 3. body.data.idempotencyKey
+//
+// The header always wins when both are supplied.
+// ============================================================================
+
+function resolveIdempotencyKey(req) {
+    const headerKey =
+        req.get("Idempotency-Key");
+
+    if (
+        typeof headerKey === "string" &&
+        headerKey.trim()
+    ) {
+        return headerKey.trim();
+    }
+
+    const bodyKey =
+        req.body?.idempotencyKey;
+
+    if (
+        typeof bodyKey === "string" &&
+        bodyKey.trim()
+    ) {
+        return bodyKey.trim();
+    }
+
+    const dataKey =
+        req.body?.data?.idempotencyKey;
+
+    if (
+        typeof dataKey === "string" &&
+        dataKey.trim()
+    ) {
+        return dataKey.trim();
+    }
+
+    return null;
+}
+
+
+// ============================================================================
+// REMOVE IDEMPOTENCY KEY FROM ACTION DATA
+// ============================================================================
+//
+// The idempotency key controls the HTTP request and must not accidentally
+// become part of the action's business data.
+//
+// ============================================================================
+
+function removeIdempotencyKeyFromData(data) {
+    if (
+        !data ||
+        typeof data !== "object" ||
+        Array.isArray(data)
+    ) {
+        return data || {};
+    }
+
+    const cleanData = {
+        ...data
+    };
+
+    delete cleanData.idempotencyKey;
+
+    return cleanData;
+}
+
+
+// ============================================================================
+// ENGINE ROUTE
+// ============================================================================
 
 router.post(
     "/",
+    project,
+    apiUsage,
+    async (req, res) => {
 
-    // ----------------------------------------------------------
-    // OPTIONAL JWT
-    // ----------------------------------------------------------
-
-    async (
-        req,
-        res,
-        next
-    ) => {
-
-        if (
-            req.headers.authorization &&
-            req.headers.authorization.startsWith(
-                "Bearer "
-            )
-        ) {
-
-            return protect(
-                req,
-                res,
-                () => next()
-            );
-        }
-
-
-        next();
-    },
-
-
-    // ----------------------------------------------------------
-    // EXECUTION
-    // ----------------------------------------------------------
-
-    async (
-        req,
-        res
-    ) => {
+        let idempotencyRecord = null;
 
         try {
 
-            // ----------------------------------------------------
-            // PROJECT
-            // ----------------------------------------------------
-
-            const projectId =
-                req.project?._id ||
-                req.project?.id ||
-                req.projectId;
-
-
-            if (!projectId) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Project context not available"
-                });
-            }
-
-
-            // ----------------------------------------------------
-            // ACTION NAME
-            // ----------------------------------------------------
-
-            const actionName =
-                String(
-                    req.body?.action || ""
-                ).trim();
-
-
-            if (!actionName) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Action name is required"
-                });
-            }
-
-
-            // ----------------------------------------------------
-            // DATA
-            // ----------------------------------------------------
-
-            const data =
-                req.body?.data &&
-                typeof req.body.data === "object" &&
-                !Array.isArray(req.body.data)
-
-                    ? req.body.data
-
-                    : {};
-
-
-            // ----------------------------------------------------
-            // ACTION
-            // ----------------------------------------------------
+            // =================================================================
+            // BASIC REQUEST DATA
+            // =================================================================
 
             const action =
-                await Action.findOne({
+                req.body?.action;
 
-                    project:
-                        projectId,
+            const originalData =
+                req.body?.data || {};
 
-                    name:
-                        actionName,
-
-                    enabled:
-                        true
-                });
+            const projectId =
+                getProjectId(req);
 
 
             if (!action) {
-
-                return res.status(404).json({
-
+                return res.status(400).json({
                     success: false,
-
-                    message:
-                        `Action '${actionName}' is not available`
+                    message: "Action is required"
                 });
             }
 
 
-            // ----------------------------------------------------
-            // PERMISSION
-            // ----------------------------------------------------
-
-            let permitted = false;
-
-
-            try {
-
-                permitted =
-                    hasPermission(
-                        req.apiKey,
-                        actionName
-                    );
-
-            } catch (error) {
-
-                permitted = false;
-            }
-
-
-            if (!permitted) {
-
-                permitted =
-                    Array.isArray(
-                        req.apiKeyPermissions
-                    ) &&
-                    (
-                        req.apiKeyPermissions.includes("*") ||
-                        req.apiKeyPermissions.includes(
-                            actionName
-                        )
-                    );
-            }
-
-
-            if (!permitted) {
-
-                return res.status(403).json({
-
+            if (!projectId) {
+                return res.status(400).json({
                     success: false,
-
-                    message:
-                        "API key does not have permission to execute this action",
-
-                    action:
-                        actionName
+                    message: "Project context is required"
                 });
             }
 
 
-            // ----------------------------------------------------
-            // EVENT
-            // ----------------------------------------------------
+            // =================================================================
+            // RESOLVE IDEMPOTENCY KEY
+            // =================================================================
 
-            const event = {
-
-                project:
-                    projectId,
-
-                projectId,
-
-                name:
-                    `manual.${actionName}`,
-
-                entityType:
-                    "action",
-
-                entityId:
-                    action._id,
-
-                actorId:
-                    req.user?._id ||
-                    req.user?.id ||
-                    null,
-
-                userId:
-                    req.user?._id ||
-                    req.user?.id ||
-                    data.user ||
-                    data.userId ||
-                    null,
-
-                data,
-
-                req,
-
-                metadata: {
-
-                    source:
-                        "global-engine",
-
-                    method:
-                        req.method,
-
-                    path:
-                        req.originalUrl,
-
-                    ip:
-                        req.ip,
-
-                    userAgent:
-                        req.get(
-                            "user-agent"
-                        ) || null,
-
-                    apiKeySource:
-                        req.apiKeySource ||
-                        null
-                }
-            };
+            const idempotencyKey =
+                resolveIdempotencyKey(req);
 
 
-            // ----------------------------------------------------
-            // EXECUTE
-            // ----------------------------------------------------
-
-            const result =
-                await processActions(
-
-                    event,
-
-                    [action]
+            const useIdempotency =
+                Boolean(
+                    idempotencyKey &&
+                    IDEMPOTENT_ACTIONS.has(action) &&
+                    !SKIP_IDEMPOTENCY.has(action)
                 );
 
 
-            // ----------------------------------------------------
-            // VERIFY ACTUAL EXECUTION
-            // ----------------------------------------------------
+            // =================================================================
+            // CLEAN ACTION DATA
+            // =================================================================
 
-            const actionResult =
-                Array.isArray(result)
-                    ? result[0]
-                    : result;
+            const data =
+                removeIdempotencyKeyFromData(
+                    originalData
+                );
 
 
-            if (
-                !actionResult ||
-                actionResult.success !== true
-            ) {
+            // =================================================================
+            // IDEMPOTENCY GATE
+            // =================================================================
+            //
+            // CRITICAL:
+            //
+            // executeUniversalAction() MUST NOT be reached until this section
+            // has established ownership of the idempotency key.
+            //
+            // =================================================================
 
-                return res.status(422).json({
+            if (useIdempotency) {
 
-                    success: false,
+                const requestHash =
+                    createRequestHash({
+                        action,
+                        data
+                    });
 
-                    action:
-                        actionName,
 
-                    result,
+                // =============================================================
+                // ATOMIC CLAIM
+                // =============================================================
 
-                    message:
-                        actionResult?.error ||
-                        actionResult?.message ||
-                        "Action execution failed"
+                let claimResult =
+                    await claim({
+                        projectId,
+                        key: idempotencyKey,
+                        action,
+                        requestHash
+                    });
+
+
+                // =============================================================
+                // FIRST REQUEST
+                // =============================================================
+
+                if (claimResult.owner) {
+
+                    idempotencyRecord =
+                        claimResult.record;
+
+                } else {
+
+                    // =========================================================
+                    // EXISTING RECORD
+                    // =========================================================
+
+                    let existing =
+                        claimResult.record;
+
+
+                    if (!existing) {
+
+                        return res.status(409).json({
+                            success: false,
+                            message:
+                                "Unable to acquire idempotency lock"
+                        });
+
+                    }
+
+
+                    // =========================================================
+                    // SAME KEY + DIFFERENT PAYLOAD
+                    // =========================================================
+
+                    if (
+                        existing.requestHash &&
+                        existing.requestHash !== requestHash
+                    ) {
+
+                        return res.status(409).json({
+                            success: false,
+                            message:
+                                "Idempotency key was already used with a different request"
+                        });
+
+                    }
+
+
+                    // =========================================================
+                    // COMPLETED
+                    // =========================================================
+                    //
+                    // THIS IS THE MOST IMPORTANT BRANCH.
+                    //
+                    // The original action has already executed.
+                    //
+                    // NEVER call executeUniversalAction() again.
+                    //
+                    // =========================================================
+
+                    if (
+                        existing.status === "completed"
+                    ) {
+
+                        return res
+                            .status(
+                                existing.responseStatus || 200
+                            )
+                            .json(
+                                existing.responseBody
+                            );
+                    }
+
+
+                    // =========================================================
+                    // PROCESSING
+                    // =========================================================
+                    //
+                    // Another request currently owns this key.
+                    //
+                    // Wait for that request to finish.
+                    //
+                    // =========================================================
+
+                    if (
+                        existing.status === "processing"
+                    ) {
+
+                        existing =
+                            await waitForCompletion({
+                                projectId,
+                                key: idempotencyKey
+                            });
+
+
+                        // =====================================================
+                        // ORIGINAL REQUEST FINISHED SUCCESSFULLY
+                        // =====================================================
+
+                        if (
+                            existing &&
+                            existing.status === "completed"
+                        ) {
+
+                            return res
+                                .status(
+                                    existing.responseStatus || 200
+                                )
+                                .json(
+                                    existing.responseBody
+                                );
+                        }
+
+
+                        // =====================================================
+                        // ORIGINAL REQUEST FAILED
+                        // =====================================================
+                        //
+                        // Allow this request to retry the failed operation.
+                        //
+                        // =====================================================
+
+                        if (
+                            existing &&
+                            existing.status === "failed"
+                        ) {
+
+                            const retry =
+                                await retryFailed({
+                                    projectId,
+                                    key: idempotencyKey,
+                                    action,
+                                    requestHash
+                                });
+
+
+                            if (!retry) {
+
+                                return res.status(409).json({
+                                    success: false,
+                                    message:
+                                        "Request with this Idempotency-Key is being retried"
+                                });
+                            }
+
+
+                            idempotencyRecord =
+                                retry;
+
+                        } else {
+
+                            // =================================================
+                            // STILL PROCESSING
+                            // =================================================
+
+                            return res.status(409).json({
+                                success: false,
+                                message:
+                                    "Request with this Idempotency-Key is still in progress"
+                            });
+                        }
+                    }
+
+
+                    // =========================================================
+                    // FAILED
+                    // =========================================================
+                    //
+                    // If the original request failed and there was no waiting
+                    // cycle above, allow this request to retry.
+                    //
+                    // =========================================================
+
+                    else if (
+                        existing.status === "failed"
+                    ) {
+
+                        const retry =
+                            await retryFailed({
+                                projectId,
+                                key: idempotencyKey,
+                                action,
+                                requestHash
+                            });
+
+
+                        if (!retry) {
+
+                            return res.status(409).json({
+                                success: false,
+                                message:
+                                    "Request with this Idempotency-Key is being retried"
+                            });
+                        }
+
+
+                        idempotencyRecord =
+                            retry;
+                    }
+
+
+                    // =========================================================
+                    // UNKNOWN STATE
+                    // =========================================================
+
+                    else {
+
+                        return res.status(409).json({
+                            success: false,
+                            message:
+                                "Invalid idempotency request state"
+                        });
+                    }
+                }
+            }
+
+
+            // =================================================================
+            // UNIVERSAL ACTION ENGINE
+            // =================================================================
+            //
+            // IMPORTANT:
+            //
+            // For idempotent requests this line is reached ONLY by the request
+            // that successfully acquired the MongoDB idempotency lock.
+            //
+            // =================================================================
+
+            const result =
+                await executeUniversalAction({
+                    projectId,
+                    action,
+                    data,
+                    req
+                });
+
+
+            // =================================================================
+            // NORMAL PUBLIC RESPONSE
+            // =================================================================
+            //
+            // Do not change the existing success response shape.
+            //
+            // =================================================================
+
+            const responseBody = {
+                success: true,
+                action,
+                result
+            };
+
+
+            // =================================================================
+            // STORE SUCCESSFUL RESPONSE
+            // =================================================================
+
+            if (idempotencyRecord) {
+
+                await complete({
+                    recordId:
+                        idempotencyRecord._id,
+
+                    responseStatus:
+                        200,
+
+                    responseBody
                 });
             }
 
 
-            // ----------------------------------------------------
-            // REAL SUCCESS
-            // ----------------------------------------------------
+            // =================================================================
+            // RETURN
+            // =================================================================
 
-            return res.status(200).json({
-
-                success: true,
-
-                action:
-                    actionName,
-
-                result
-            });
-
+            return res.json(
+                responseBody
+            );
 
         } catch (error) {
 
             console.error(
-                "GLOBAL ACTION ENGINE ERROR:",
+                "UNIVERSAL ENGINE ERROR:",
                 error
             );
 
 
-            return res.status(500).json({
+            // =================================================================
+            // MARK IDEMPOTENT REQUEST FAILED
+            // =================================================================
 
+            if (idempotencyRecord) {
+
+                try {
+
+                    await fail({
+                        recordId:
+                            idempotencyRecord._id,
+
+                        errorMessage:
+                            error.message
+                    });
+
+                } catch (idempotencyError) {
+
+                    console.error(
+                        "IDEMPOTENCY FAILURE:",
+                        idempotencyError
+                    );
+                }
+            }
+
+
+            // =================================================================
+            // NORMAL ERROR RESPONSE
+            // =================================================================
+
+            return res.status(
+                error.statusCode || 500
+            ).json({
                 success: false,
-
                 message:
-                    error?.message ||
+                    error.message ||
                     "Action execution failed"
             });
         }
     }
 );
 
+
+// ============================================================================
+// EXPORT
+// ============================================================================
 
 module.exports = router;

@@ -12,7 +12,6 @@ const Wallet =
 const audit =
     require("../../services/auditService");
 
-
 module.exports = {
 
     name: "withdrawal.approve",
@@ -46,20 +45,24 @@ module.exports = {
         try {
 
             let approvedWithdrawal = null;
+            let alreadyApproved = false;
 
             await session.withTransaction(
                 async () => {
 
-                    /*
-                     * ------------------------------------------------
-                     * FIND WITHDRAWAL
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // FIND WITHDRAWAL
+                    // ====================================================
+
                     const withdrawal =
                         await Withdrawal.findOne({
-                            _id: withdrawalId,
-                            project: projectId
-                        }).session(session);
+                            _id:
+                                withdrawalId,
+                            project:
+                                projectId
+                        }).session(
+                            session
+                        );
 
                     if (!withdrawal) {
                         throw new Error(
@@ -67,11 +70,37 @@ module.exports = {
                         );
                     }
 
-                    /*
-                     * ------------------------------------------------
-                     * ONLY PENDING
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // BUSINESS IDEMPOTENCY
+                    // ====================================================
+                    //
+                    // If already approved, do NOT:
+                    //
+                    // - change wallet
+                    // - increase totalWithdrawn
+                    // - create another transaction
+                    //
+                    // Simply return the existing approved withdrawal.
+                    // ====================================================
+
+                    if (
+                        withdrawal.status ===
+                        "approved"
+                    ) {
+
+                        alreadyApproved =
+                            true;
+
+                        approvedWithdrawal =
+                            withdrawal;
+
+                        return;
+                    }
+
+                    // ====================================================
+                    // OTHER TERMINAL STATES
+                    // ====================================================
+
                     if (
                         withdrawal.status !==
                         "pending"
@@ -81,16 +110,19 @@ module.exports = {
                         );
                     }
 
-                    /*
-                     * ------------------------------------------------
-                     * VALIDATE AMOUNT
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // VALIDATE AMOUNT
+                    // ====================================================
+
                     const amount =
-                        Number(withdrawal.amount);
+                        Number(
+                            withdrawal.amount
+                        );
 
                     if (
-                        !Number.isFinite(amount) ||
+                        !Number.isFinite(
+                            amount
+                        ) ||
                         amount <= 0
                     ) {
                         throw new Error(
@@ -98,20 +130,19 @@ module.exports = {
                         );
                     }
 
-                    /*
-                     * ------------------------------------------------
-                     * FIND WALLET
-                     * ------------------------------------------------
-                     *
-                     * Do NOT use ResourceData.
-                     *
-                     * This is the real Wallet ledger.
-                     */
+                    // ====================================================
+                    // FIND REAL WALLET
+                    // ====================================================
+
                     const wallet =
                         await Wallet.findOne({
-                            project: projectId,
-                            user: withdrawal.user
-                        }).session(session);
+                            project:
+                                projectId,
+                            user:
+                                withdrawal.user
+                        }).session(
+                            session
+                        );
 
                     if (!wallet) {
                         throw new Error(
@@ -119,53 +150,51 @@ module.exports = {
                         );
                     }
 
-                    /*
-                     * ------------------------------------------------
-                     * VERIFY RESERVED MONEY
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // VERIFY RESERVED MONEY
+                    // ====================================================
+
                     if (
-                        Number(wallet.pendingBalance || 0) <
-                        amount
+                        Number(
+                            wallet.pendingBalance ||
+                            0
+                        ) < amount
                     ) {
                         throw new Error(
                             "Insufficient pending balance"
                         );
                     }
 
-                    /*
-                     * ------------------------------------------------
-                     * COMPLETE WALLET RESERVATION
-                     * ------------------------------------------------
-                     *
-                     * Withdrawal request already moved:
-                     *
-                     * balance -> pendingBalance
-                     *
-                     * Approval now:
-                     *
-                     * pendingBalance -= amount
-                     * totalWithdrawn += amount
-                     *
-                     * Balance is NOT added back.
-                     */
+                    // ====================================================
+                    // COMPLETE RESERVATION
+                    // ====================================================
+                    //
+                    // pendingBalance -= amount
+                    // totalWithdrawn += amount
+                    //
+                    // balance is NOT restored.
+                    // ====================================================
+
                     wallet.pendingBalance =
-                        Number(wallet.pendingBalance || 0) -
-                        amount;
+                        Number(
+                            wallet.pendingBalance ||
+                            0
+                        ) - amount;
 
                     wallet.totalWithdrawn =
-                        Number(wallet.totalWithdrawn || 0) +
-                        amount;
+                        Number(
+                            wallet.totalWithdrawn ||
+                            0
+                        ) + amount;
 
                     await wallet.save({
                         session
                     });
 
-                    /*
-                     * ------------------------------------------------
-                     * MARK WITHDRAWAL APPROVED
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // MARK APPROVED
+                    // ====================================================
+
                     withdrawal.status =
                         "approved";
 
@@ -179,20 +208,23 @@ module.exports = {
                         session
                     });
 
-                    /*
-                     * ------------------------------------------------
-                     * TRANSACTION
-                     * ------------------------------------------------
-                     */
+                    // ====================================================
+                    // TRANSACTION
+                    // ====================================================
+
                     const transaction =
                         await Transaction.findOne({
-                            project: projectId,
-                            user: withdrawal.user,
+                            project:
+                                projectId,
+                            user:
+                                withdrawal.user,
                             withdrawal:
                                 withdrawal._id,
                             type:
                                 "withdrawal_request"
-                        }).session(session);
+                        }).session(
+                            session
+                        );
 
                     if (transaction) {
 
@@ -249,47 +281,65 @@ module.exports = {
                 }
             );
 
-            /*
-             * --------------------------------------------------------
-             * AUDIT
-             * --------------------------------------------------------
-             */
-            await audit.log({
+            // ============================================================
+            // AUDIT
+            // ============================================================
+            //
+            // Do not create a second financial effect.
+            // We still return success for an already-approved request.
+            // ============================================================
 
-                project:
-                    projectId,
+            if (
+                !alreadyApproved
+            ) {
 
-                actor:
-                    actorId,
+                await audit.log({
 
-                user:
-                    approvedWithdrawal.user,
+                    project:
+                        projectId,
 
-                action:
-                    "withdrawal.approved",
+                    actor:
+                        actorId,
 
-                resource:
-                    "withdrawal",
+                    user:
+                        approvedWithdrawal.user,
 
-                metadata: {
+                    action:
+                        "withdrawal.approved",
 
-                    withdrawalId:
-                        approvedWithdrawal._id,
+                    resource:
+                        "withdrawal",
 
-                    amount:
-                        approvedWithdrawal.amount
-                },
+                    metadata: {
 
-                req:
-                    ctx?.req
-            });
+                        withdrawalId:
+                            approvedWithdrawal._id,
+
+                        amount:
+                            approvedWithdrawal.amount
+                    },
+
+                    req:
+                        ctx?.req
+                });
+            }
+
+            // ============================================================
+            // SUCCESS
+            // ============================================================
 
             return {
 
                 success: true,
 
                 withdrawal:
-                    approvedWithdrawal
+                    approvedWithdrawal,
+
+                ...(alreadyApproved
+                    ? {
+                        idempotent: true
+                    }
+                    : {})
             };
 
         } finally {
