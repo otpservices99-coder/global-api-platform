@@ -38,6 +38,29 @@ const userSchema = new mongoose.Schema(
             index: true
         },
 
+        /*
+         * Device fingerprint supplied during registration.
+         *
+         * IMPORTANT:
+         * This is intentionally NOT globally unique.
+         *
+         * Registration logic enforces:
+         *
+         *   normal user + same project + same deviceId
+         *       => rejected
+         *
+         *   super_admin + same deviceId
+         *       => allowed
+         *
+         * This preserves support/admin flexibility.
+         */
+        deviceId: {
+            type: String,
+            default: null,
+            trim: true,
+            index: true
+        },
+
         role: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Role",
@@ -80,20 +103,15 @@ const userSchema = new mongoose.Schema(
  * AUTOMATIC WALLET CREATION
  * ============================================================
  *
- * Any normal User.create() / user.save() operation that creates
- * a user will automatically ensure that the user has a wallet.
+ * Preserve the existing wallet behavior.
  *
- * This means registration, admin-created users, OAuth code that
- * uses save(), and seed code using normal User documents all get
- * the same wallet behavior.
+ * Every normal User.create() / save() operation creates or
+ * ensures the corresponding project wallet.
  */
 userSchema.post("save", async function(doc) {
 
     try {
 
-        /*
-         * Users without a project cannot have a project wallet.
-         */
         if (!doc.project) {
             return;
         }
@@ -124,12 +142,6 @@ userSchema.post("save", async function(doc) {
 
     } catch (error) {
 
-        /*
-         * Do not silently hide wallet creation errors.
-         *
-         * The user itself has already been saved, but the error
-         * is logged so deployment/debugging can see the problem.
-         */
         console.error(
             "USER WALLET ENSURE ERROR:",
             error
