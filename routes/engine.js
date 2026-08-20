@@ -5,6 +5,8 @@ const router = express.Router();
 const project = require("../middleware/project");
 const apiUsage = require("../middleware/apiUsage");
 
+const Action = require("../models/Action");
+
 const {
     executeUniversalAction
 } = require("../services/universalActionEngine");
@@ -21,14 +23,6 @@ const {
 
 // ============================================================================
 // IDEMPOTENT ACTIONS
-// ============================================================================
-//
-// These actions can create financial/state-changing effects.
-//
-// When an Idempotency-Key is supplied, the same key is guaranteed to execute
-// only once per project within the configured TTL.
-//
-// Requests without an Idempotency-Key continue to behave exactly as before.
 // ============================================================================
 
 const IDEMPOTENT_ACTIONS = new Set([
@@ -71,15 +65,6 @@ function getProjectId(req) {
 // ============================================================================
 // IDEMPOTENCY KEY
 // ============================================================================
-//
-// PRECEDENCE:
-//
-// 1. Idempotency-Key header
-// 2. body.idempotencyKey
-// 3. body.data.idempotencyKey
-//
-// The header always wins when both are supplied.
-// ============================================================================
 
 function resolveIdempotencyKey(req) {
     const headerKey =
@@ -117,12 +102,7 @@ function resolveIdempotencyKey(req) {
 
 
 // ============================================================================
-// REMOVE IDEMPOTENCY KEY FROM ACTION DATA
-// ============================================================================
-//
-// The idempotency key controls the HTTP request and must not accidentally
-// become part of the action's business data.
-//
+// REMOVE IDEMPOTENCY KEY FROM BUSINESS DATA
 // ============================================================================
 
 function removeIdempotencyKeyFromData(data) {
@@ -145,6 +125,48 @@ function removeIdempotencyKeyFromData(data) {
 
 
 // ============================================================================
+// FIND ACTION RECORD
+// ============================================================================
+//
+// UniversalActionEngine.executeUniversalAction() requires:
+//
+//     actionRecord
+//
+// The HTTP route receives:
+//
+//     action: "wallet.credit"
+//
+// Therefore this route resolves the DB Action record before execution.
+//
+// ============================================================================
+
+async function findActionRecord({
+    projectId,
+    action
+}) {
+    const actionRecord =
+        await Action.findOne({
+            project: projectId,
+            name: action,
+            enabled: true
+        });
+
+    if (!actionRecord) {
+        const error =
+            new Error(
+                `Action "${action}" not found or is disabled`
+            );
+
+        error.statusCode = 404;
+
+        throw error;
+    }
+
+    return actionRecord;
+}
+
+
+// ============================================================================
 // ENGINE ROUTE
 // ============================================================================
 
@@ -159,7 +181,7 @@ router.post(
         try {
 
             // =================================================================
-            // BASIC REQUEST DATA
+            // REQUEST DATA
             // =================================================================
 
             const action =
@@ -189,6 +211,16 @@ router.post(
 
 
             // =================================================================
+            // CLEAN BUSINESS DATA
+            // =================================================================
+
+            const data =
+                removeIdempotencyKeyFromData(
+                    originalData
+                );
+
+
+            // =================================================================
             // RESOLVE IDEMPOTENCY KEY
             // =================================================================
 
@@ -205,24 +237,7 @@ router.post(
 
 
             // =================================================================
-            // CLEAN ACTION DATA
-            // =================================================================
-
-            const data =
-                removeIdempotencyKeyFromData(
-                    originalData
-                );
-
-
-            // =================================================================
             // IDEMPOTENCY GATE
-            // =================================================================
-            //
-            // CRITICAL:
-            //
-            // executeUniversalAction() MUST NOT be reached until this section
-            // has established ownership of the idempotency key.
-            //
             // =================================================================
 
             if (useIdempotency) {
@@ -234,10 +249,6 @@ router.post(
                     });
 
 
-                // =============================================================
-                // ATOMIC CLAIM
-                // =============================================================
-
                 let claimResult =
                     await claim({
                         projectId,
@@ -248,7 +259,7 @@ router.post(
 
 
                 // =============================================================
-                // FIRST REQUEST
+                // FIRST REQUEST OWNS THE KEY
                 // =============================================================
 
                 if (claimResult.owner) {
@@ -258,59 +269,42 @@ router.post(
 
                 } else {
 
-                    // =========================================================
-                    // EXISTING RECORD
-                    // =========================================================
-
                     let existing =
                         claimResult.record;
 
 
                     if (!existing) {
-
                         return res.status(409).json({
                             success: false,
                             message:
                                 "Unable to acquire idempotency lock"
                         });
-
                     }
 
 
                     // =========================================================
-                    // SAME KEY + DIFFERENT PAYLOAD
+                    // SAME KEY + DIFFERENT REQUEST
                     // =========================================================
 
                     if (
                         existing.requestHash &&
                         existing.requestHash !== requestHash
                     ) {
-
                         return res.status(409).json({
                             success: false,
                             message:
                                 "Idempotency key was already used with a different request"
                         });
-
                     }
 
 
                     // =========================================================
-                    // COMPLETED
-                    // =========================================================
-                    //
-                    // THIS IS THE MOST IMPORTANT BRANCH.
-                    //
-                    // The original action has already executed.
-                    //
-                    // NEVER call executeUniversalAction() again.
-                    //
+                    // ALREADY COMPLETED
                     // =========================================================
 
                     if (
                         existing.status === "completed"
                     ) {
-
                         return res
                             .status(
                                 existing.responseStatus || 200
@@ -323,12 +317,6 @@ router.post(
 
                     // =========================================================
                     // PROCESSING
-                    // =========================================================
-                    //
-                    // Another request currently owns this key.
-                    //
-                    // Wait for that request to finish.
-                    //
                     // =========================================================
 
                     if (
@@ -343,14 +331,13 @@ router.post(
 
 
                         // =====================================================
-                        // ORIGINAL REQUEST FINISHED SUCCESSFULLY
+                        // COMPLETED WHILE WE WAITED
                         // =====================================================
 
                         if (
                             existing &&
                             existing.status === "completed"
                         ) {
-
                             return res
                                 .status(
                                     existing.responseStatus || 200
@@ -362,11 +349,7 @@ router.post(
 
 
                         // =====================================================
-                        // ORIGINAL REQUEST FAILED
-                        // =====================================================
-                        //
-                        // Allow this request to retry the failed operation.
-                        //
+                        // FAILED WHILE WE WAITED
                         // =====================================================
 
                         if (
@@ -384,7 +367,6 @@ router.post(
 
 
                             if (!retry) {
-
                                 return res.status(409).json({
                                     success: false,
                                     message:
@@ -398,10 +380,6 @@ router.post(
 
                         } else {
 
-                            // =================================================
-                            // STILL PROCESSING
-                            // =================================================
-
                             return res.status(409).json({
                                 success: false,
                                 message:
@@ -413,11 +391,6 @@ router.post(
 
                     // =========================================================
                     // FAILED
-                    // =========================================================
-                    //
-                    // If the original request failed and there was no waiting
-                    // cycle above, allow this request to retry.
-                    //
                     // =========================================================
 
                     else if (
@@ -434,7 +407,6 @@ router.post(
 
 
                         if (!retry) {
-
                             return res.status(409).json({
                                 success: false,
                                 message:
@@ -465,31 +437,60 @@ router.post(
 
 
             // =================================================================
+            // LOAD THE REAL ACTION RECORD
+            // =================================================================
+            //
+            // THIS FIXES:
+            //
+            //     "Action record is required"
+            //
+            // UniversalActionEngine expects:
+            //
+            //     actionRecord
+            //
+            // not:
+            //
+            //     action
+            //
+            // =================================================================
+
+            const actionRecord =
+                await findActionRecord({
+                    projectId,
+                    action
+                });
+
+
+            // =================================================================
             // UNIVERSAL ACTION ENGINE
             // =================================================================
             //
             // IMPORTANT:
             //
-            // For idempotent requests this line is reached ONLY by the request
-            // that successfully acquired the MongoDB idempotency lock.
+            // The DB Action record is now supplied correctly.
             //
             // =================================================================
 
             const result =
                 await executeUniversalAction({
+                    actionRecord,
                     projectId,
-                    action,
+                    actorId:
+                        req.user?._id ||
+                        req.user?.id ||
+                        req.auth?.userId ||
+                        null,
+                    userId:
+                        data.user ||
+                        data.userId ||
+                        null,
                     data,
                     req
                 });
 
 
             // =================================================================
-            // NORMAL PUBLIC RESPONSE
-            // =================================================================
-            //
-            // Do not change the existing success response shape.
-            //
+            // PUBLIC RESPONSE
             // =================================================================
 
             const responseBody = {
@@ -500,7 +501,7 @@ router.post(
 
 
             // =================================================================
-            // STORE SUCCESSFUL RESPONSE
+            // SAVE IDEMPOTENT RESPONSE
             // =================================================================
 
             if (idempotencyRecord) {
@@ -518,7 +519,7 @@ router.post(
 
 
             // =================================================================
-            // RETURN
+            // RETURN SUCCESS
             // =================================================================
 
             return res.json(
@@ -560,7 +561,7 @@ router.post(
 
 
             // =================================================================
-            // NORMAL ERROR RESPONSE
+            // ERROR RESPONSE
             // =================================================================
 
             return res.status(
