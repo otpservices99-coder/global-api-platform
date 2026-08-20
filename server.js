@@ -73,6 +73,10 @@ const adminImpersonationRoute =
 const adminWalletRoute =
     require("./routes/adminWallet");
 
+const earnRoutes = require("./routes/earn");
+
+const postbackRoutes = require("./routes/postbacks");
+
 const adminTransactionRoute =
     require("./routes/adminTransaction");
 
@@ -229,6 +233,17 @@ app.use(
 app.use(
     "/api/auth",
     authRoute
+);
+
+
+app.use(
+    "/api/v1/earn",
+    earnRoutes
+);
+
+app.use(
+    "/api/v1/postbacks",
+    postbackRoutes
 );
 
 
