@@ -1245,6 +1245,109 @@ function executePing({
 }
 
 
+
+// ============================================================================
+// CONFIGURED OPERATION SIDE EFFECTS
+// ============================================================================
+//
+// Generic configuration-driven side effects.
+// No action names are hard-coded here.
+// ============================================================================
+async function executeConfiguredSideEffects(
+    sideEffects,
+    context = {}
+) {
+    if (!sideEffects) {
+        return [];
+    }
+
+    const definitions = Array.isArray(sideEffects)
+        ? sideEffects
+        : [sideEffects];
+
+    const results = [];
+
+    for (
+        let index = 0;
+        index < definitions.length;
+        index++
+    ) {
+        const sideEffect = definitions[index];
+
+        if (
+            !sideEffect ||
+            typeof sideEffect !== "object"
+        ) {
+            continue;
+        }
+
+        const sideResource = resolveValue(
+            sideEffect.resource,
+            context
+        );
+
+        const sideOperation = resolveValue(
+            sideEffect.operation,
+            context
+        );
+
+        if (!sideResource) {
+            throw new Error(
+                `Side effect ${index}: resource is required`
+            );
+        }
+
+        if (!sideOperation) {
+            throw new Error(
+                `Side effect ${index}: operation is required`
+            );
+        }
+
+        const sideConfig = resolveObject(
+            sideEffect.config || {},
+            context
+        );
+
+        const sideData =
+            sideEffect.data !== undefined
+                ? resolveObject(
+                    sideEffect.data,
+                    context
+                )
+                : undefined;
+
+        const finalConfig = {
+            ...sideConfig
+        };
+
+        if (sideData !== undefined) {
+            finalConfig.data = sideData;
+        }
+
+        const sideResult =
+            await executeResourceAction(
+                sideResource,
+                sideOperation,
+                finalConfig,
+                context
+            );
+
+        assertSuccessfulResult(
+            sideResult,
+            `sideEffect[${index}] ${sideResource}.${sideOperation}`
+        );
+
+        results.push({
+            index,
+            resource: sideResource,
+            operation: sideOperation,
+            result: sideResult
+        });
+    }
+
+    return results;
+}
+
 // ============================================================================
 // RESOURCE ACTION
 // ============================================================================

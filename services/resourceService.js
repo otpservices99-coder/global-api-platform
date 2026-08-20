@@ -1162,62 +1162,49 @@ async function increment({
     if (!projectId) {
         return {
             success: false,
-            message:
-                "Project ID is required"
+            message: "Project ID is required"
         };
     }
 
     if (!resource) {
         return {
             success: false,
-            message:
-                "Resource is required"
+            message: "Resource is required"
         };
     }
 
     if (!field) {
         return {
             success: false,
-            message:
-                "Increment field is required"
+            message: "Increment field is required"
         };
     }
 
-    const numericAmount =
-        Number(amount);
+    const numericAmount = Number(amount);
 
-    if (
-        !Number.isFinite(
-            numericAmount
-        )
-    ) {
+    if (!Number.isFinite(numericAmount)) {
         return {
             success: false,
-            message:
-                "Invalid increment amount"
+            message: "Invalid increment amount"
         };
     }
 
-    const resourceDocument =
-        await getResource({
-            projectId,
-            resource
-        });
+    const resourceDocument = await getResource({
+        projectId,
+        resource
+    });
 
     if (!resourceDocument) {
         return {
             success: false,
-            message:
-                "Resource not found"
+            message: "Resource not found"
         };
     }
 
     const {
         provider,
         Model
-    } = resolveModel(
-        resourceDocument
-    );
+    } = resolveModel(resourceDocument);
 
     const hasId =
         id !== undefined &&
@@ -1228,17 +1215,12 @@ async function increment({
         filter &&
         typeof filter === "object" &&
         !Array.isArray(filter)
-            ? {
-                ...filter
-            }
+            ? { ...filter }
             : {};
 
-    const lookup =
-        hasId
-            ? {
-                _id: id
-            }
-            : safeFilter;
+    const lookup = hasId
+        ? { _id: id }
+        : safeFilter;
 
     if (
         !hasId &&
@@ -1246,14 +1228,11 @@ async function increment({
     ) {
         return {
             success: false,
-            message:
-                "Record ID or filter is required"
+            message: "Record ID or filter is required"
         };
     }
 
-    if (
-        provider === "mongoose"
-    ) {
+    if (provider === "mongoose") {
         const record =
             await Model.findOneAndUpdate(
                 {
@@ -1265,8 +1244,7 @@ async function increment({
                 },
                 {
                     $inc: {
-                        [field]:
-                            numericAmount
+                        [field]: numericAmount
                     }
                 },
                 {
@@ -1278,8 +1256,7 @@ async function increment({
         if (!record) {
             return {
                 success: false,
-                message:
-                    "Record not found"
+                message: "Record not found"
             };
         }
 
@@ -1300,8 +1277,7 @@ async function increment({
     if (!record) {
         return {
             success: false,
-            message:
-                "Record not found"
+            message: "Record not found"
         };
     }
 
