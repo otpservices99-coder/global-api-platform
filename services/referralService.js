@@ -6,6 +6,7 @@ const Wallet = require("../models/Wallet");
 const Transaction = require("../models/Transaction");
 const Referral = require("../models/Referral");
 const ReferralConfig = require("../models/ReferralConfig");
+const Notification = require("../models/Notification");
 
 // ============================================================
 // PROJECT RESOLUTION
@@ -475,6 +476,35 @@ async function applyReferral({
                     session:
                         mongoSession
                 });
+
+                // --------------------------------------------
+                // REFERRAL REWARD NOTIFICATION
+                // --------------------------------------------
+                // Notification failure must never undo the
+                // completed referral financial transaction.
+                // --------------------------------------------
+
+                try {
+                    await Notification.create(
+                        [{
+                            project: projectId,
+                            user: referrer._id,
+                            title: "Referral reward",
+                            message:
+                                "You earned " + reward + " " + (config.currency || "NGN") + " for a successful referral.",
+                            type: "reward",
+                            read: false
+                        }],
+                        {
+                            session: mongoSession
+                        }
+                    );
+                } catch (notificationError) {
+                    console.error(
+                        "REFERRAL NOTIFICATION ERROR:",
+                        notificationError.message
+                    );
+                }
 
                 // --------------------------------------------
                 // Result
