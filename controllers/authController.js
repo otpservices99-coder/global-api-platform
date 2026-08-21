@@ -1,7 +1,14 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const walletService = require("../services/walletService");
+
+const walletService =
+    require("../services/walletService");
+
+const {
+    ensureReferralCode,
+    applyReferral
+} = require("../services/referralService");
 
 
 // ============================================================
@@ -23,7 +30,9 @@ async function isSuperAdminRequest(req) {
         }
 
         const token =
-            authorization.substring(7).trim();
+            authorization
+                .substring(7)
+                .trim();
 
         if (!token) {
             return false;
@@ -36,23 +45,26 @@ async function isSuperAdminRequest(req) {
             );
 
         if (
-            decoded.platformRole !== "super_admin"
+            decoded.platformRole !==
+            "super_admin"
         ) {
             return false;
         }
 
-        const user = await User.findById(
-            decoded.id
-        ).select(
-            "_id platformRole status project"
-        );
+        const user =
+            await User.findById(
+                decoded.id
+            ).select(
+                "_id platformRole status project"
+            );
 
         if (!user) {
             return false;
         }
 
         if (
-            user.platformRole !== "super_admin"
+            user.platformRole !==
+            "super_admin"
         ) {
             return false;
         }
@@ -64,24 +76,9 @@ async function isSuperAdminRequest(req) {
             return false;
         }
 
-        /*
-         * The API-key middleware remains authoritative for
-         * project selection.
-         *
-         * We therefore do not replace req.projectId here.
-         */
-
         return true;
 
     } catch (error) {
-
-        /*
-         * Invalid/expired/missing admin JWT simply means:
-         *
-         * "This is not an authenticated super-admin request."
-         *
-         * It must NOT break normal registration.
-         */
 
         return false;
     }
@@ -97,11 +94,9 @@ const registerUser = async (req, res) => {
     try {
 
         /*
-         * Project authentication has already happened inside:
+         * Project authentication is already handled by:
          *
          *     middleware/project.js
-         *
-         * req.projectId is therefore the authoritative project.
          */
 
         const project =
@@ -112,12 +107,12 @@ const registerUser = async (req, res) => {
             project?._id ||
             null;
 
-
         if (!projectId) {
 
             return res.status(400).json({
                 success: false,
-                message: "Target project is required"
+                message:
+                    "Target project is required"
             });
         }
 
@@ -130,7 +125,8 @@ const registerUser = async (req, res) => {
             username,
             email,
             password,
-            deviceId
+            deviceId,
+            referralCode
         } = req.body;
 
 
@@ -153,7 +149,7 @@ const registerUser = async (req, res) => {
 
 
         // ====================================================
-        // NORMALIZE DEVICE ID
+        // NORMALIZE DEVICE
         // ====================================================
 
         const normalizedDeviceId =
@@ -163,7 +159,20 @@ const registerUser = async (req, res) => {
 
 
         // ====================================================
-        // DETERMINE SUPER ADMIN STATUS
+        // NORMALIZE REFERRAL CODE
+        // ====================================================
+
+        const normalizedReferralCode =
+            typeof referralCode === "string" &&
+            referralCode.trim()
+                ? referralCode
+                    .trim()
+                    .toUpperCase()
+                : null;
+
+
+        // ====================================================
+        // SUPER ADMIN
         // ====================================================
 
         const superAdmin =
@@ -174,14 +183,6 @@ const registerUser = async (req, res) => {
         // DEVICE VALIDATION
         // ====================================================
 
-        /*
-         * Normal users MUST provide a deviceId.
-         *
-         * Super admins are allowed to create accounts without
-         * a deviceId because they are not subject to the normal
-         * device restriction.
-         */
-
         if (
             !superAdmin &&
             !normalizedDeviceId
@@ -189,13 +190,14 @@ const registerUser = async (req, res) => {
 
             return res.status(400).json({
                 success: false,
-                message: "deviceId is required"
+                message:
+                    "deviceId is required"
             });
         }
 
 
         // ====================================================
-        // CHECK USERNAME / EMAIL
+        // NORMALIZE USER DATA
         // ====================================================
 
         const normalizedEmail =
@@ -207,6 +209,10 @@ const registerUser = async (req, res) => {
             String(username)
                 .trim();
 
+
+        // ====================================================
+        // CHECK USERNAME / EMAIL
+        // ====================================================
 
         const existingUser =
             await User.findOne({
@@ -238,13 +244,6 @@ const registerUser = async (req, res) => {
         // DEVICE DUPLICATE CHECK
         // ====================================================
 
-        /*
-         * Only normal registration is restricted.
-         *
-         * A super admin may deliberately create multiple
-         * accounts from the same device.
-         */
-
         if (
             !superAdmin &&
             normalizedDeviceId
@@ -255,7 +254,9 @@ const registerUser = async (req, res) => {
                     project: projectId,
                     deviceId:
                         normalizedDeviceId
-                }).select("_id username email");
+                }).select(
+                    "_id username email"
+                );
 
 
             if (existingDeviceUser) {
@@ -264,6 +265,62 @@ const registerUser = async (req, res) => {
                     success: false,
                     message:
                         "An account already exists on this device"
+                });
+            }
+        }
+
+
+        // ====================================================
+        // VALIDATE REFERRAL CODE BEFORE USER CREATION
+        // ====================================================
+        //
+        // This prevents creating an account and then discovering
+        // that the referral code was invalid.
+        //
+        // We only validate existence here.
+        // The actual reward is still controlled by referralService
+        // and ReferralConfig.
+        //
+
+        let referralReferrer = null;
+
+        if (normalizedReferralCode) {
+
+            const referralProgram =
+                await require(
+                    "../services/referralService"
+                ).getConfig(
+                    projectId
+                );
+
+            if (
+                !referralProgram ||
+                referralProgram.enabled !== true
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Referral program is disabled"
+                });
+            }
+
+            referralReferrer =
+                await User.findOne({
+                    project: projectId,
+                    referralCode:
+                        normalizedReferralCode
+                }).select(
+                    "_id username referralCode"
+                );
+
+
+            if (!referralReferrer) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid referral code"
                 });
             }
         }
@@ -286,7 +343,9 @@ const registerUser = async (req, res) => {
 
         const user =
             await User.create({
-                project: projectId,
+
+                project:
+                    projectId,
 
                 username:
                     normalizedUsername,
@@ -296,13 +355,6 @@ const registerUser = async (req, res) => {
 
                 password:
                     hashedPassword,
-
-                /*
-                 * Preserve the device for normal users.
-                 *
-                 * Super-admin-created accounts may also receive
-                 * a deviceId if one was supplied.
-                 */
 
                 deviceId:
                     normalizedDeviceId ||
@@ -314,19 +366,84 @@ const registerUser = async (req, res) => {
         // ENSURE WALLET
         // ====================================================
 
-        /*
-         * Keep the explicit wallet service call.
-         *
-         * This preserves the existing registration behavior
-         * and remains compatible with wallet.credit targeting:
-         *
-         *     data.user
-         */
-
         await walletService.ensureWallet(
             projectId,
             user._id
         );
+
+
+        // ====================================================
+        // GENERATE USER'S OWN REFERRAL CODE
+        // ====================================================
+        //
+        // Every user gets a referral code automatically.
+        //
+
+        await ensureReferralCode(
+            user
+        );
+
+
+        // ====================================================
+        // APPLY REFERRAL
+        // ====================================================
+        //
+        // Important:
+        //
+        // The reward amount is NOT hardcoded here.
+        //
+        // referralService reads:
+        //
+        // ReferralConfig.rewardPerReferral
+        //
+        // Therefore you can later change the reward without
+        // changing this registration controller.
+        //
+
+        let referralResult = {
+            applied: false
+        };
+
+        if (
+            normalizedReferralCode &&
+            referralReferrer
+        ) {
+
+            try {
+
+                referralResult =
+                    await applyReferral({
+                        projectId,
+                        referredUserId:
+                            user._id,
+                        referralCode:
+                            normalizedReferralCode
+                    });
+
+            } catch (referralError) {
+
+                /*
+                 * The user has already been created.
+                 *
+                 * We return the registration result but clearly
+                 * report that the referral reward could not be
+                 * applied.
+                 *
+                 * This avoids breaking normal account creation.
+                 */
+
+                console.error(
+                    "REFERRAL APPLY ERROR:",
+                    referralError
+                );
+
+                referralResult = {
+                    applied: false,
+                    error:
+                        referralError.message
+                };
+            }
+        }
 
 
         // ====================================================
@@ -341,6 +458,7 @@ const registerUser = async (req, res) => {
                 "Account created successfully",
 
             user: {
+
                 id:
                     user._id,
 
@@ -352,7 +470,26 @@ const registerUser = async (req, res) => {
 
                 project:
                     project?.name ||
-                    projectId
+                    projectId,
+
+                referralCode:
+                    user.referralCode,
+
+                referredBy:
+                    referralResult.applied
+                        ? referralResult.referrerId
+                        : null
+            },
+
+            referral: {
+
+                applied:
+                    referralResult.applied === true,
+
+                reward:
+                    referralResult.applied
+                        ? referralResult.reward
+                        : 0
             }
         });
 
@@ -363,19 +500,13 @@ const registerUser = async (req, res) => {
             error
         );
 
-
-        /*
-         * Handle a race condition where two registrations with
-         * the same device arrive at almost exactly the same time.
-         *
-         * Because deviceId is intentionally not a unique index,
-         * the normal lookup remains authoritative while avoiding
-         * database-level blocking of super-admin accounts.
-         */
-
-        return res.status(500).json({
+        return res.status(
+            error.statusCode || 500
+        ).json({
             success: false,
-            message: error.message
+            message:
+                error.message ||
+                "Unable to create account"
         });
     }
 };
@@ -488,13 +619,6 @@ const loginUser = async (req, res) => {
         // JWT
         // ====================================================
 
-        /*
-         * No expiresIn is supplied intentionally.
-         *
-         * Existing JWT verification remains compatible because
-         * tokens without an exp claim do not expire naturally.
-         */
-
         const token =
             jwt.sign(
                 {
@@ -523,6 +647,15 @@ const loginUser = async (req, res) => {
             new Date();
 
         await user.save();
+
+
+        // ====================================================
+        // ENSURE LEGACY USERS HAVE REFERRAL CODE
+        // ====================================================
+
+        await ensureReferralCode(
+            user
+        );
 
 
         // ====================================================
@@ -556,7 +689,10 @@ const loginUser = async (req, res) => {
                     user.platformRole,
 
                 project:
-                    user.project
+                    user.project,
+
+                referralCode:
+                    user.referralCode
             }
         });
 

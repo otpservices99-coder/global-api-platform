@@ -54,17 +54,38 @@ const userSchema = new mongoose.Schema(
             default: "active"
         },
 
-        /*
-         * Device fingerprint supplied by the client.
-         *
-         * This is intentionally NOT unique by itself.
-         *
-         * Multiple accounts may exist on the same device when
-         * the authenticated requester is a super admin.
-         */
         deviceId: {
             type: String,
             trim: true,
+            default: null,
+            index: true
+        },
+
+        /*
+         * ========================================================
+         * REFERRAL
+         * ========================================================
+         *
+         * referralCode:
+         * The code this user can give to other people.
+         *
+         * referredBy:
+         * The user who referred this account.
+         *
+         * These are project-scoped.
+         */
+
+        referralCode: {
+            type: String,
+            trim: true,
+            uppercase: true,
+            default: null,
+            index: true
+        },
+
+        referredBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
             default: null,
             index: true
         },
@@ -94,14 +115,6 @@ const userSchema = new mongoose.Schema(
  * ============================================================
  * DEVICE INDEX
  * ============================================================
- *
- * Device restriction is enforced by the registration controller:
- *
- *     project + deviceId
- *
- * We intentionally do NOT create a unique MongoDB index because
- * super admins must be able to create multiple accounts from
- * the same device.
  */
 
 userSchema.index({
@@ -112,13 +125,31 @@ userSchema.index({
 
 /*
  * ============================================================
- * AUTOMATIC WALLET CREATION
+ * REFERRAL CODE INDEX
  * ============================================================
  *
- * Every normal User.save()/User.create() operation for a
- * project user automatically ensures the wallet exists.
+ * A code must identify one user.
  *
- * This preserves the existing wallet architecture.
+ * Sparse allows existing users without a referralCode
+ * to remain valid while codes are generated.
+ */
+
+userSchema.index(
+    {
+        project: 1,
+        referralCode: 1
+    },
+    {
+        unique: true,
+        sparse: true
+    }
+);
+
+
+/*
+ * ============================================================
+ * AUTOMATIC WALLET CREATION
+ * ============================================================
  */
 
 userSchema.post("save", async function(doc) {

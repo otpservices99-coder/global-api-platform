@@ -64,6 +64,9 @@ const adminDashboardRoute =
 const adminWithdrawalRoute =
     require("./routes/adminWithdrawal");
 
+const referralRoutes =
+    require("./routes/referral");
+
 const adminUsersRoute =
     require("./routes/adminUsers");
 
@@ -239,6 +242,11 @@ app.use(
 app.use(
     "/api/v1/earn",
     earnRoutes
+);
+
+app.use(
+    "/api/v1/referrals",
+    referralRoutes
 );
 
 app.use(
