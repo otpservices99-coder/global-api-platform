@@ -281,6 +281,7 @@ router.post(
         }
     },
 
+    upload.single("image"),
     createTask
 );
 
@@ -464,6 +465,7 @@ router.patch(
         }
     },
 
+    upload.single("image"),
     updateTask
 );
 

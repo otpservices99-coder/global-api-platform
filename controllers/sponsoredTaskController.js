@@ -315,6 +315,40 @@ const createTask = async (req, res) => {
             metadata = {}
         } = req.body;
 
+
+        // --------------------------------------------------------
+        // OPTIONAL CAMPAIGN BANNER IMAGE
+        // Multer -> Cloudinary -> imageUrl
+        // --------------------------------------------------------
+
+        let finalImageUrl =
+            String(imageUrl || "").trim();
+
+        if (req.file) {
+            const uploadedAsset =
+                await fileUploadService.uploadFile(
+                    req.file,
+                    {
+                        folder:
+                            "earnify/sponsored-tasks/banners",
+
+                        resourceType:
+                            "image"
+                    }
+                );
+
+            finalImageUrl =
+                uploadedAsset.secureUrl ||
+                uploadedAsset.url ||
+                "";
+
+            if (!finalImageUrl) {
+                throw new Error(
+                    "Cloudinary upload did not return a secure URL"
+                );
+            }
+        }
+
         if (
             !title ||
             !description ||
@@ -348,7 +382,7 @@ const createTask = async (req, res) => {
 
                 title,
                 description,
-                imageUrl,
+                imageUrl: finalImageUrl,
                 targetUrl,
                 platform,
 
@@ -426,6 +460,40 @@ const adminListTasks = async (req, res) => {
 
 const updateTask = async (req, res) => {
     try {
+
+        // --------------------------------------------------------
+        // OPTIONAL CAMPAIGN BANNER IMAGE
+        // Multer -> Cloudinary -> imageUrl
+        // --------------------------------------------------------
+
+        if (req.file) {
+            const uploadedAsset =
+                await fileUploadService.uploadFile(
+                    req.file,
+                    {
+                        folder:
+                            "earnify/sponsored-tasks/banners",
+
+                        resourceType:
+                            "image"
+                    }
+                );
+
+            const uploadedImageUrl =
+                uploadedAsset.secureUrl ||
+                uploadedAsset.url ||
+                "";
+
+            if (!uploadedImageUrl) {
+                throw new Error(
+                    "Cloudinary upload did not return a secure URL"
+                );
+            }
+
+            updates.imageUrl =
+                uploadedImageUrl;
+        }
+
         const allowed = [
             "title",
             "description",
