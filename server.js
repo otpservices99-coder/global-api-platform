@@ -61,6 +61,12 @@ const dashboardRoute =
 const adminDashboardRoute =
     require("./routes/adminDashboard");
 
+const sponsoredTasksRoute =
+    require("./routes/sponsoredTasks");
+
+const adminSponsoredTasksRoute =
+    require("./routes/adminSponsoredTasks");
+
 const adminWithdrawalRoute =
     require("./routes/adminWithdrawal");
 
@@ -298,6 +304,18 @@ app.use(
 app.use(
     "/api/v1/notifications",
     notificationRoute
+);
+
+
+
+app.use(
+    "/api/v1/sponsored-tasks",
+    sponsoredTasksRoute
+);
+
+app.use(
+    "/api/v1/admin/sponsored-tasks",
+    adminSponsoredTasksRoute
 );
 
 
