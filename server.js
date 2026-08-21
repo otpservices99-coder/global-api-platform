@@ -76,9 +76,11 @@ const adminImpersonationRoute =
 const adminWalletRoute =
     require("./routes/adminWallet");
 
-const earnRoutes = require("./routes/earn");
+const earnRoutes =
+    require("./routes/earn");
 
-const postbackRoutes = require("./routes/postbacks");
+const postbackRoutes =
+    require("./routes/postbacks");
 
 const adminTransactionRoute =
     require("./routes/adminTransaction");
@@ -239,15 +241,29 @@ app.use(
 );
 
 
+// ============================================================
+// EARN
+// ============================================================
+
 app.use(
     "/api/v1/earn",
     earnRoutes
 );
 
+
+// ============================================================
+// REFERRALS
+// ============================================================
+
 app.use(
     "/api/v1/referrals",
     referralRoutes
 );
+
+
+// ============================================================
+// POSTBACKS
+// ============================================================
 
 app.use(
     "/api/v1/postbacks",
@@ -262,6 +278,26 @@ app.use(
 app.use(
     "/api/user",
     userRoute
+);
+
+
+// ============================================================
+// USER NOTIFICATIONS
+// ============================================================
+//
+// User-facing notification API.
+//
+// GET   /api/v1/notifications
+// PUT   /api/v1/notifications/:id/read
+// PATCH /api/v1/notifications/:id/read
+// POST  /api/v1/notifications/read-all
+//
+// The route itself applies project + JWT protection.
+//
+
+app.use(
+    "/api/v1/notifications",
+    notificationRoute
 );
 
 
@@ -419,21 +455,6 @@ app.use(
 
 // ============================================================
 // ADMIN RESOURCE MANAGER
-//
-// IMPORTANT:
-//
-// This does NOT create a second resource system.
-//
-// It exposes the SAME resourceManagerRoute that is already
-// available at /api/v1/resource-manager.
-//
-// Therefore:
-//
-// /api/v1/admin/resources
-// /api/v1/resource-manager
-//
-// both operate on the same Resource model.
-//
 // ============================================================
 
 app.use(
@@ -480,16 +501,6 @@ app.use(
 
 // ============================================================
 // GLOBAL RESOURCE API
-//
-// Dynamic resource names are resolved from the database.
-//
-// Examples:
-//
-// GET  /api/v1/resources
-// GET  /api/v1/resources/users
-// POST /api/v1/resources/users
-// GET  /api/v1/resources/users/:id
-//
 // ============================================================
 
 app.use(
@@ -502,17 +513,6 @@ app.use(
 
 // ============================================================
 // RESOURCE MANAGER
-//
-// Global database-driven Resource definitions.
-//
-// Examples:
-//
-// GET    /api/v1/resource-manager
-// POST   /api/v1/resource-manager
-// GET    /api/v1/resource-manager/:id
-// PUT    /api/v1/resource-manager/:id
-// DELETE /api/v1/resource-manager/:id
-//
 // ============================================================
 
 app.use(
@@ -537,9 +537,6 @@ app.use(
 
 // ============================================================
 // ADMIN SCHEMA MANAGER
-//
-// Same global Schema Manager.
-// This is only an additional API namespace.
 // ============================================================
 
 app.use(
@@ -584,6 +581,7 @@ app.use(
 
 // ============================================================
 // GLOBAL ACTION ENGINE
+// ============================================================
 //
 // Action
 //   ↓
@@ -594,7 +592,7 @@ app.use(
 // ResourceService
 //
 // No Earnify-specific action implementation here.
-// ============================================================
+//
 
 app.use(
     "/api/v1/engine",
@@ -625,15 +623,6 @@ app.use(
 
 
 // ============================================================
-// ROLE / WORKFLOW EXTENSIONS
-// ============================================================
-//
-// Reserved for dynamically loaded workflow and execution
-// systems. No hard-coded business resources belong here.
-// ============================================================
-
-
-// ============================================================
 // 404
 // ============================================================
 
@@ -644,11 +633,14 @@ app.use(
 
             success: false,
 
-            message: "Route not found",
+            message:
+                "Route not found",
 
-            path: req.originalUrl,
+            path:
+                req.originalUrl,
 
-            method: req.method
+            method:
+                req.method
 
         });
 
@@ -695,6 +687,7 @@ app.use(
 const PORT =
     process.env.PORT || 3000;
 
+
 app.listen(
     PORT,
     () => {
@@ -717,6 +710,10 @@ app.listen(
 
         console.log(
             `🛡️ Admin Resources: /api/v1/admin/resources`
+        );
+
+        console.log(
+            `🔔 User Notifications: /api/v1/notifications`
         );
 
         console.log(

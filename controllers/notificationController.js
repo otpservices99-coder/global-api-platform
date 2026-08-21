@@ -1,114 +1,300 @@
-const Notification = require("../models/Notification");
+const Notification =
+    require("../models/Notification");
 
 
+// ============================================================
 // GET USER NOTIFICATIONS
-const getNotifications = async(req,res)=>{
+// ============================================================
 
-try{
+const getNotifications =
+    async (req, res) => {
 
-const notifications =
-await Notification.find({
+        try {
 
-project:req.project._id,
-user:req.user.id
+            const projectId =
+                req.project?._id ||
+                req.projectId;
 
-})
-.sort({
-createdAt:-1
-});
-
-
-res.json({
-
-success:true,
-data:notifications
-
-});
+            const userId =
+                req.user?._id ||
+                req.user?.id;
 
 
-}catch(error){
+            if (
+                !projectId ||
+                !userId
+            ) {
 
-res.status(500).json({
+                return res.status(400).json({
 
-success:false,
-message:error.message
+                    success: false,
 
-});
+                    message:
+                        "Project and user are required"
 
-}
+                });
 
-};
-
-
-
-
-// MARK AS READ
-const markRead = async(req,res)=>{
-
-try{
+            }
 
 
-const notification =
-await Notification.findOneAndUpdate(
+            const notifications =
+                await Notification.find({
 
-{
-_id:req.params.id,
-project:req.project._id,
-user:req.user.id
-},
+                    project:
+                        projectId,
 
-{
-read:true
-},
+                    user:
+                        userId
 
-{
-new:true
-}
-
-);
+                })
+                .sort({
+                    createdAt: -1
+                });
 
 
+            return res.json({
 
-if(!notification){
+                success: true,
 
-return res.status(404).json({
+                data:
+                    notifications
 
-success:false,
-message:"Notification not found"
-
-});
-
-}
+            });
 
 
+        } catch (error) {
 
-res.json({
+            console.error(
+                "GET NOTIFICATIONS ERROR:",
+                error
+            );
 
-success:true,
-data:notification
+            return res.status(500).json({
 
-});
+                success: false,
 
+                message:
+                    error.message
 
-}catch(error){
+            });
 
-res.status(500).json({
+        }
 
-success:false,
-message:error.message
-
-});
-
-}
-
-
-};
+    };
 
 
+// ============================================================
+// MARK ONE NOTIFICATION AS READ
+// ============================================================
 
-module.exports={
+const markRead =
+    async (req, res) => {
 
-getNotifications,
-markRead
+        try {
+
+            const projectId =
+                req.project?._id ||
+                req.projectId;
+
+            const userId =
+                req.user?._id ||
+                req.user?.id;
+
+
+            if (
+                !projectId ||
+                !userId
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Project and user are required"
+
+                });
+
+            }
+
+
+            const notification =
+                await Notification.findOneAndUpdate(
+
+                    {
+
+                        _id:
+                            req.params.id,
+
+                        project:
+                            projectId,
+
+                        user:
+                            userId
+
+                    },
+
+                    {
+
+                        $set: {
+                            read: true
+                        }
+
+                    },
+
+                    {
+
+                        new: true
+
+                    }
+
+                );
+
+
+            if (!notification) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Notification not found"
+
+                });
+
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                data:
+                    notification
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "MARK NOTIFICATION READ ERROR:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    error.message
+
+            });
+
+        }
+
+    };
+
+
+// ============================================================
+// MARK ALL USER NOTIFICATIONS AS READ
+// ============================================================
+
+const markAllRead =
+    async (req, res) => {
+
+        try {
+
+            const projectId =
+                req.project?._id ||
+                req.projectId;
+
+            const userId =
+                req.user?._id ||
+                req.user?.id;
+
+
+            if (
+                !projectId ||
+                !userId
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Project and user are required"
+
+                });
+
+            }
+
+
+            const result =
+                await Notification.updateMany(
+
+                    {
+
+                        project:
+                            projectId,
+
+                        user:
+                            userId,
+
+                        read:
+                            false
+
+                    },
+
+                    {
+
+                        $set: {
+                            read: true
+                        }
+
+                    }
+
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                modifiedCount:
+                    result.modifiedCount || 0
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "MARK ALL NOTIFICATIONS READ ERROR:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    error.message
+
+            });
+
+        }
+
+    };
+
+
+module.exports = {
+
+    getNotifications,
+
+    markRead,
+
+    markAllRead
 
 };
