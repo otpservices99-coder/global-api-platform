@@ -280,8 +280,6 @@ router.post(
             return next(error);
         }
     },
-
-    upload.single("image"),
     createTask
 );
 
@@ -464,8 +462,6 @@ router.patch(
             return next(error);
         }
     },
-
-    upload.single("image"),
     updateTask
 );
 
