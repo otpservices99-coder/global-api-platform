@@ -1,13 +1,18 @@
 const express = require("express");
+
 const router = express.Router();
 
-const protect = require("../middleware/auth");
-const admin = require("../middleware/admin");
-const project = require("../middleware/project");
-const upload = require("../middleware/upload");
+const protect =
+    require("../middleware/auth");
 
-const fileUploadService =
-    require("../services/fileUploadService");
+const admin =
+    require("../middleware/admin");
+
+const project =
+    require("../middleware/project");
+
+const upload =
+    require("../middleware/upload");
 
 const {
     createTask,
@@ -16,158 +21,24 @@ const {
     adminSubmissions,
     approveSubmission,
     rejectSubmission
-} = require("../controllers/sponsoredTaskController");
+} =
+    require("../controllers/sponsoredTaskController");
 
 
 // ============================================================
-// ADMIN SPONSORED TASK IMAGE UPLOAD
-//
-// Primary field:
-//   image=<file>
-//
-// Aliases also accepted:
-//   banner=<file>
-//   taskImage=<file>
-//
-// Flow:
-//   Multer -> Cloudinary -> req.body.imageUrl
-//
-// This allows the existing createTask/updateTask controllers
-// to continue using imageUrl exactly as before.
+// ADMIN SPONSORED TASKS
 // ============================================================
 
-const adminTaskImageUpload = [
-    upload.fields([
-        {
-            name: "image",
-            maxCount: 1
-        },
-        {
-            name: "banner",
-            maxCount: 1
-        },
-        {
-            name: "taskImage",
-            maxCount: 1
-        }
-    ]),
-
-    async (req, res, next) => {
-        try {
-            // Multer populates req.body for multipart/form-data.
-            // Make absolutely sure it exists before the controller.
-            req.body = req.body || {};
-
-            const fields = req.files || {};
-
-            const file =
-                fields.image?.[0] ||
-                fields.banner?.[0] ||
-                fields.taskImage?.[0] ||
-                null;
-
-            req.file = file;
-
-            // No file:
-            // Keep normal JSON/imageUrl behavior untouched.
-            if (!file) {
-                return next();
-            }
-
-            // ----------------------------------------------------
-            // IMAGE VALIDATION
-            // ----------------------------------------------------
-
-            const allowedMimeTypes = [
-                "image/jpeg",
-                "image/png",
-                "image/webp",
-                "image/gif"
-            ];
-
-            if (!allowedMimeTypes.includes(file.mimetype)) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Only JPEG, PNG, WebP, and GIF images are allowed"
-                });
-            }
-
-            // 5 MB maximum campaign banner.
-            if (Number(file.size || 0) > 5 * 1024 * 1024) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Campaign image must not exceed 5MB"
-                });
-            }
-
-            // ----------------------------------------------------
-            // CLOUDINARY
-            // Reuse the same global upload service used by
-            // sponsored-task proof uploads.
-            // ----------------------------------------------------
-
-            const uploadedAsset =
-                await fileUploadService.uploadFile(
-                    file,
-                    {
-                        folder:
-                            "earnify/sponsored-tasks/banners",
-
-                        resourceType: "image"
-                    }
-                );
-
-            const secureUrl =
-                uploadedAsset?.secureUrl ||
-                uploadedAsset?.url ||
-                "";
-
-            if (!secureUrl) {
-                return res.status(500).json({
-                    success: false,
-                    message:
-                        "Cloudinary upload completed without a secure URL"
-                });
-            }
-
-            // ----------------------------------------------------
-            // IMPORTANT
-            //
-            // Existing createTask/updateTask already understand
-            // imageUrl. We simply inject the Cloudinary URL into
-            // the same field.
-            // ----------------------------------------------------
-
-            req.body.imageUrl = secureUrl;
-
-            // Keep upload metadata available if needed later.
-            req.uploadedTaskImage = uploadedAsset;
-
-            return next();
-
-        } catch (error) {
-            console.error(
-                "ADMIN SPONSORED TASK IMAGE UPLOAD ERROR:",
-                error
-            );
-
-            return res.status(
-                error.statusCode || 500
-            ).json({
-                success: false,
-                message:
-                    error.message ||
-                    "Campaign image upload failed"
-            });
-        }
-    }
-];
+/**
+ * @swagger
+ * tags:
+ *   - name: Admin Sponsored Tasks
+ *     description: Admin campaign management and sponsored task review APIs
+ */
 
 
 // ============================================================
-// GET ADMIN SPONSORED TASKS
+// LIST TASKS
 // ============================================================
 
 /**
@@ -198,19 +69,22 @@ router.get(
 
 
 // ============================================================
-// CREATE ADMIN SPONSORED TASK
+// CREATE SPONSORED TASK
 //
 // Supports:
 //
-// 1. application/json
-//    imageUrl=https://...
+// A) application/json
 //
-// 2. multipart/form-data
-//    image=<file>
+// B) multipart/form-data
 //
-// Aliases:
-//    banner=<file>
-//    taskImage=<file>
+// Multipart image field:
+//   image
+//
+// Alternative accepted fields:
+//   banner
+//   taskImage
+//
+// JSON imageUrl remains supported.
 // ============================================================
 
 /**
@@ -219,9 +93,12 @@ router.get(
  *   post:
  *     summary: Create sponsored task
  *     description: >
- *       Creates a sponsored task. Supports both JSON imageUrl and
- *       multipart campaign image upload. Multipart images are uploaded
- *       to Cloudinary and the resulting secure URL is stored as imageUrl.
+ *       Creates a sponsored task. Supports both JSON and multipart/form-data.
+ *       For multipart requests, upload the campaign banner using the `image`
+ *       field. The image is processed through Multer and the existing
+ *       Cloudinary upload pipeline, then the resulting secure URL is stored
+ *       as `imageUrl`. The alternative file fields `banner` and `taskImage`
+ *       are also accepted.
  *     tags: [Admin Sponsored Tasks]
  *     security:
  *       - bearerAuth: []
@@ -240,21 +117,29 @@ router.get(
  *             properties:
  *               title:
  *                 type: string
+ *                 example: Telegram Campaign
  *               description:
  *                 type: string
+ *                 example: Join our Telegram channel and submit proof
  *               imageUrl:
  *                 type: string
  *                 format: uri
+ *                 description: Existing campaign image URL when not uploading a file
+ *                 example: https://res.cloudinary.com/example/image/upload/banner.png
  *               targetUrl:
  *                 type: string
  *                 format: uri
+ *                 example: https://t.me/example
  *               platform:
  *                 type: string
+ *                 example: telegram
  *               rewardAmount:
  *                 type: number
+ *                 example: 100
  *               currency:
  *                 type: string
  *                 default: NGN
+ *                 example: NGN
  *               needsProof:
  *                 type: boolean
  *                 default: true
@@ -265,9 +150,14 @@ router.get(
  *                   - link_visit
  *                   - platform_api
  *                   - hybrid
+ *                 default: manual
  *               maxCompletions:
  *                 type: integer
  *                 nullable: true
+ *                 example: 100
+ *               active:
+ *                 type: boolean
+ *                 default: true
  *               startsAt:
  *                 type: string
  *                 format: date-time
@@ -278,7 +168,6 @@ router.get(
  *                 nullable: true
  *               metadata:
  *                 type: object
- *
  *         multipart/form-data:
  *           schema:
  *             type: object
@@ -290,20 +179,25 @@ router.get(
  *             properties:
  *               title:
  *                 type: string
+ *                 example: Telegram Campaign
  *               description:
  *                 type: string
+ *                 example: Join our Telegram channel and submit proof
  *               targetUrl:
  *                 type: string
+ *                 example: https://t.me/example
  *               rewardAmount:
  *                 type: number
- *               platform:
- *                 type: string
+ *                 example: 100
  *               currency:
  *                 type: string
- *                 default: NGN
+ *                 example: NGN
+ *               platform:
+ *                 type: string
+ *                 example: telegram
  *               needsProof:
  *                 type: boolean
- *                 default: true
+ *                 example: true
  *               verificationMode:
  *                 type: string
  *                 enum:
@@ -311,32 +205,39 @@ router.get(
  *                   - link_visit
  *                   - platform_api
  *                   - hybrid
+ *                 example: manual
  *               maxCompletions:
  *                 type: integer
  *                 nullable: true
- *               startsAt:
- *                 type: string
- *                 format: date-time
- *               endsAt:
- *                 type: string
- *                 format: date-time
- *               metadata:
- *                 type: string
- *                 description: JSON object encoded as a string
+ *               active:
+ *                 type: boolean
+ *                 example: true
  *               image:
  *                 type: string
  *                 format: binary
- *                 description: Campaign banner image. JPEG, PNG, WebP, or GIF. Maximum 5MB.
- *
+ *                 description: Campaign banner image. JPEG, PNG, WebP or GIF. Maximum 5MB.
+ *               banner:
+ *                 type: string
+ *                 format: binary
+ *                 description: Alternative campaign banner file field.
+ *               taskImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: Alternative campaign image file field.
+ *               imageUrl:
+ *                 type: string
+ *                 description: Existing image URL if no file is uploaded.
  *     responses:
  *       201:
  *         description: Sponsored task created successfully
  *       400:
- *         description: Invalid task data or campaign image
+ *         description: Invalid task data
  *       401:
  *         description: Authentication required
  *       403:
  *         description: Admin access required
+ *       500:
+ *         description: Server or Cloudinary upload error
  */
 
 router.post(
@@ -344,28 +245,58 @@ router.post(
     protect,
     project,
     admin,
-    ...adminTaskImageUpload,
+
+    upload.fields([
+        {
+            name: "image",
+            maxCount: 1
+        },
+        {
+            name: "banner",
+            maxCount: 1
+        },
+        {
+            name: "taskImage",
+            maxCount: 1
+        }
+    ]),
+
+    (req, res, next) => {
+        try {
+            const fields =
+                req.files || {};
+
+            const file =
+                fields.image?.[0] ||
+                fields.banner?.[0] ||
+                fields.taskImage?.[0] ||
+                null;
+
+            req.file = file;
+
+            return next();
+
+        } catch (error) {
+            return next(error);
+        }
+    },
+
     createTask
 );
 
 
 // ============================================================
-// UPDATE ADMIN SPONSORED TASK
+// UPDATE SPONSORED TASK
 //
 // Supports:
 //
-// JSON:
-//   imageUrl=https://...
+// A) application/json
 //
-// Multipart:
-//   image=<file>
+// B) multipart/form-data
 //
-// Aliases:
-//   banner=<file>
-//   taskImage=<file>
+// image is optional.
 //
-// imageUrl="" can be used to clear an image when no file
-// is supplied.
+// imageUrl: "" can be used to clear an existing image.
 // ============================================================
 
 /**
@@ -374,9 +305,11 @@ router.post(
  *   patch:
  *     summary: Update sponsored task
  *     description: >
- *       Updates a sponsored task. Supports normal JSON updates and
- *       optional multipart campaign image upload. A new uploaded image
- *       replaces imageUrl with its Cloudinary secure URL.
+ *       Updates a sponsored task. Supports both JSON and multipart/form-data.
+ *       Upload a replacement campaign banner using the `image` field.
+ *       The uploaded image is sent through the existing Multer and Cloudinary
+ *       pipeline and the resulting secure URL replaces `imageUrl`.
+ *       Set `imageUrl` to an empty string to clear the existing image.
  *     tags: [Admin Sponsored Tasks]
  *     security:
  *       - bearerAuth: []
@@ -401,7 +334,7 @@ router.post(
  *                 type: string
  *               imageUrl:
  *                 type: string
- *                 description: Existing image URL. Send an empty string to clear it.
+ *                 description: Existing image URL, or empty string to clear image
  *               targetUrl:
  *                 type: string
  *               platform:
@@ -427,7 +360,6 @@ router.post(
  *                 format: date-time
  *               metadata:
  *                 type: object
- *
  *         multipart/form-data:
  *           schema:
  *             type: object
@@ -436,10 +368,6 @@ router.post(
  *                 type: string
  *               description:
  *                 type: string
- *               image:
- *                 type: string
- *                 format: binary
- *                 description: New campaign banner image. JPEG, PNG, WebP, or GIF. Maximum 5MB.
  *               targetUrl:
  *                 type: string
  *               platform:
@@ -464,22 +392,35 @@ router.post(
  *                 type: string
  *                 format: date-time
  *               metadata:
+ *                 type: object
+ *               image:
  *                 type: string
+ *                 format: binary
+ *                 description: Replacement campaign banner. JPEG, PNG, WebP or GIF. Maximum 5MB.
+ *               banner:
+ *                 type: string
+ *                 format: binary
+ *                 description: Alternative replacement image field.
+ *               taskImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: Alternative replacement image field.
  *               imageUrl:
  *                 type: string
- *                 description: Send empty string to clear the existing image when no file is uploaded.
- *
+ *                 description: Existing image URL or empty string to clear image.
  *     responses:
  *       200:
  *         description: Sponsored task updated successfully
  *       400:
- *         description: Invalid task data or campaign image
+ *         description: Invalid task data
  *       401:
  *         description: Authentication required
  *       403:
  *         description: Admin access required
  *       404:
  *         description: Sponsored task not found
+ *       500:
+ *         description: Server or Cloudinary upload error
  */
 
 router.patch(
@@ -487,7 +428,42 @@ router.patch(
     protect,
     project,
     admin,
-    ...adminTaskImageUpload,
+
+    upload.fields([
+        {
+            name: "image",
+            maxCount: 1
+        },
+        {
+            name: "banner",
+            maxCount: 1
+        },
+        {
+            name: "taskImage",
+            maxCount: 1
+        }
+    ]),
+
+    (req, res, next) => {
+        try {
+            const fields =
+                req.files || {};
+
+            const file =
+                fields.image?.[0] ||
+                fields.banner?.[0] ||
+                fields.taskImage?.[0] ||
+                null;
+
+            req.file = file;
+
+            return next();
+
+        } catch (error) {
+            return next(error);
+        }
+    },
+
     updateTask
 );
 
@@ -516,10 +492,12 @@ router.patch(
  *             - approved
  *             - rejected
  *             - clawed_back
+ *         description: Filter submissions by status
  *       - in: query
  *         name: taskId
  *         schema:
  *           type: string
+ *         description: Filter submissions by sponsored task ID
  *     responses:
  *       200:
  *         description: Sponsored task submissions returned
@@ -558,6 +536,7 @@ router.get(
  *         required: true
  *         schema:
  *           type: string
+ *         description: Sponsored task submission ID
  *     requestBody:
  *       required: false
  *       content:
@@ -567,6 +546,7 @@ router.get(
  *             properties:
  *               reviewNote:
  *                 type: string
+ *                 example: Proof verified successfully.
  *     responses:
  *       200:
  *         description: Submission approved
@@ -606,6 +586,7 @@ router.post(
  *         required: true
  *         schema:
  *           type: string
+ *         description: Sponsored task submission ID
  *     requestBody:
  *       required: true
  *       content:
@@ -617,8 +598,10 @@ router.post(
  *             properties:
  *               reason:
  *                 type: string
+ *                 example: Submitted proof does not match the task requirements.
  *               rejectionReason:
  *                 type: string
+ *                 description: Alternative accepted rejection reason field
  *     responses:
  *       200:
  *         description: Submission rejected
