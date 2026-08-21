@@ -17,8 +17,11 @@ const Notification =
 
 const {
     notifySponsoredTaskSubmission
-} =
-    require("./notificationService");
+} = require("./notificationService");
+
+// ============================================================
+// HELPERS
+// ============================================================
 
 function hashValue(value) {
     if (!value) {
@@ -47,6 +50,10 @@ function getProjectId(req) {
     );
 }
 
+// ============================================================
+// FRAUD SCORE
+// ============================================================
+
 function calculateFraudScore({
     task,
     user,
@@ -54,31 +61,46 @@ function calculateFraudScore({
     proofUrl
 }) {
     let score = 0;
+
     const flags = [];
 
     if (!proofUrl) {
         score += 40;
-        flags.push("missing_proof");
+
+        flags.push(
+            "missing_proof"
+        );
     }
 
     if (
         task.targetUrl &&
         proofUrl &&
         String(proofUrl).trim() ===
-        String(task.targetUrl).trim()
+            String(task.targetUrl).trim()
     ) {
         score += 25;
-        flags.push("proof_equals_target");
+
+        flags.push(
+            "proof_equals_target"
+        );
     }
 
-    if (!req.headers["user-agent"]) {
+    if (
+        !req.headers["user-agent"]
+    ) {
         score += 5;
-        flags.push("missing_user_agent");
+
+        flags.push(
+            "missing_user_agent"
+        );
     }
 
     if (!user?.deviceId) {
         score += 5;
-        flags.push("missing_device_id");
+
+        flags.push(
+            "missing_device_id"
+        );
     }
 
     return {
@@ -100,24 +122,42 @@ async function getAvailableTasks({
     const tasks =
         await SponsoredTask.find({
             project: projectId,
+
             active: true,
 
             $and: [
                 {
                     $or: [
-                        { startsAt: null },
-                        { startsAt: { $lte: now } }
+                        {
+                            startsAt: null
+                        },
+                        {
+                            startsAt: {
+                                $lte: now
+                            }
+                        }
                     ]
                 },
+
                 {
                     $or: [
-                        { endsAt: null },
-                        { endsAt: { $gte: now } }
+                        {
+                            endsAt: null
+                        },
+                        {
+                            endsAt: {
+                                $gte: now
+                            }
+                        }
                     ]
                 },
+
                 {
                     $or: [
-                        { maxCompletions: null },
+                        {
+                            maxCompletions:
+                                null
+                        },
                         {
                             $expr: {
                                 $lt: [
@@ -130,15 +170,17 @@ async function getAvailableTasks({
                 }
             ]
         })
-        .sort({
-            createdAt: -1
-        })
-        .lean();
+            .sort({
+                createdAt: -1
+            })
+            .lean();
 
     const approved =
         await SponsoredTaskSubmission.find({
             project: projectId,
+
             user: userId,
+
             status: {
                 $in: [
                     "approved",
@@ -146,13 +188,14 @@ async function getAvailableTasks({
                 ]
             }
         })
-        .select("task")
-        .lean();
+            .select("task")
+            .lean();
 
     const completedIds =
         new Set(
             approved.map(
-                item => String(item.task)
+                item =>
+                    String(item.task)
             )
         );
 
@@ -167,6 +210,19 @@ async function getAvailableTasks({
 // ============================================================
 // SUBMIT TASK
 // ============================================================
+//
+// Supports:
+//
+// - Cloudinary uploaded proof
+// - direct proof URL
+// - Cloudinary metadata
+// - existing Telegram/admin notification
+//
+// IMPORTANT:
+// Database submission is created first.
+// Telegram notification is sent afterwards.
+// Notification failure NEVER cancels the submission.
+// ============================================================
 
 async function submitTask({
     projectId,
@@ -174,8 +230,13 @@ async function submitTask({
     taskId,
     proofUrl,
     proofType = "image",
+    proofMetadata = {},
     req
 }) {
+    // --------------------------------------------------------
+    // LOAD TASK
+    // --------------------------------------------------------
+
     const task =
         await SponsoredTask.findOne({
             _id: taskId,
@@ -193,6 +254,10 @@ async function submitTask({
 
         throw error;
     }
+
+    // --------------------------------------------------------
+    // PREVENT DUPLICATE APPROVED COMPLETION
+    // --------------------------------------------------------
 
     const existingApproved =
         await SponsoredTaskSubmission.findOne({
@@ -213,23 +278,38 @@ async function submitTask({
         throw error;
     }
 
+    // --------------------------------------------------------
+    // ATTEMPT NUMBER
+    // --------------------------------------------------------
+
     const lastSubmission =
         await SponsoredTaskSubmission.findOne({
             project: projectId,
             task: taskId,
             user: userId
         })
-        .sort({
-            attemptNumber: -1
-        });
+            .sort({
+                attemptNumber: -1
+            });
 
     const attemptNumber =
         lastSubmission
-            ? Number(lastSubmission.attemptNumber || 0) + 1
+            ? Number(
+                  lastSubmission.attemptNumber ||
+                      0
+              ) + 1
             : 1;
+
+    // --------------------------------------------------------
+    // USER
+    // --------------------------------------------------------
 
     const user =
         req.user;
+
+    // --------------------------------------------------------
+    // FRAUD
+    // --------------------------------------------------------
 
     const fraud =
         calculateFraudScore({
@@ -239,16 +319,24 @@ async function submitTask({
             proofUrl
         });
 
+    // --------------------------------------------------------
+    // CREATE SUBMISSION
+    // --------------------------------------------------------
+
     const submission =
         await SponsoredTaskSubmission.create({
             project: projectId,
+
             task: taskId,
+
             user: userId,
 
             status: "pending",
 
             proofUrl:
-                String(proofUrl || "").trim(),
+                String(
+                    proofUrl || ""
+                ).trim(),
 
             proofType,
 
@@ -281,38 +369,64 @@ async function submitTask({
             ipHash:
                 hashValue(
                     req.ip ||
-                    req.headers["x-forwarded-for"] ||
+                    req.headers[
+                        "x-forwarded-for"
+                    ] ||
                     ""
                 ),
 
             userAgent:
-                req.headers["user-agent"] || ""
+                req.headers[
+                    "user-agent"
+                ] || "",
+
+            // ------------------------------------------------
+            // CLOUDINARY METADATA
+            // ------------------------------------------------
+
+            metadata:
+                proofMetadata || {}
         });
 
-    /*
-     * TASK_ADMIN_NOTIFICATION_ALREADY_ADDED
-     *
-     * Send the admin/Telegram alert only after MongoDB
-     * successfully created the submission.
-     *
-     * Notification failure never cancels the submission.
-     */
+    // ========================================================
+    // ADMIN / TELEGRAM NOTIFICATION
+    // ========================================================
+    //
+    // The Cloudinary secure URL is already in:
+    //
+    // submission.proofUrl
+    //
+    // notificationService sends that value as imageUrl.
+    //
+    // DO NOT allow notification failure to cancel the
+    // successfully-created MongoDB submission.
+    // ========================================================
 
     try {
         const notificationUser =
-            await require("../models/User")
+            await require(
+                "../models/User"
+            )
                 .findById(userId)
-                .select("username email deviceId")
+                .select(
+                    "username email deviceId"
+                )
                 .lean();
 
         await notifySponsoredTaskSubmission({
             projectId,
+
             submission,
+
             task,
-            user: notificationUser
+
+            user:
+                notificationUser
         });
 
-    } catch (notificationError) {
+    } catch (
+        notificationError
+    ) {
         console.error(
             "SPONSORED TASK ADMIN NOTIFICATION ERROR:",
             notificationError.message
@@ -349,14 +463,24 @@ async function approveSubmission({
         throw error;
     }
 
-    if (submission.status === "approved") {
+    // --------------------------------------------------------
+    // IDEMPOTENT APPROVAL
+    // --------------------------------------------------------
+
+    if (
+        submission.status ===
+        "approved"
+    ) {
         return {
             submission,
             idempotent: true
         };
     }
 
-    if (submission.status !== "pending") {
+    if (
+        submission.status !==
+        "pending"
+    ) {
         const error =
             new Error(
                 "Only pending submissions can be approved"
@@ -366,6 +490,10 @@ async function approveSubmission({
 
         throw error;
     }
+
+    // --------------------------------------------------------
+    // LOAD TASK
+    // --------------------------------------------------------
 
     const task =
         await SponsoredTask.findOne({
@@ -379,20 +507,14 @@ async function approveSubmission({
         );
     }
 
-    const wallet =
-        await Wallet.findOne({
-            project: projectId,
-            user: submission.user
-        });
-
-    if (!wallet) {
-        throw new Error(
-            "User wallet not found"
-        );
-    }
+    // --------------------------------------------------------
+    // VALIDATE REWARD
+    // --------------------------------------------------------
 
     const amount =
-        Number(submission.rewardAmount);
+        Number(
+            submission.rewardAmount
+        );
 
     if (
         !Number.isFinite(amount) ||
@@ -403,6 +525,10 @@ async function approveSubmission({
         );
     }
 
+    // --------------------------------------------------------
+    // TRANSACTION SESSION
+    // --------------------------------------------------------
+
     const session =
         await SponsoredTaskSubmission.startSession();
 
@@ -411,6 +537,10 @@ async function approveSubmission({
 
         await session.withTransaction(
             async () => {
+                // ------------------------------------------------
+                // RELOAD SUBMISSION INSIDE TRANSACTION
+                // ------------------------------------------------
+
                 const fresh =
                     await SponsoredTaskSubmission
                         .findOne({
@@ -425,8 +555,13 @@ async function approveSubmission({
                     );
                 }
 
+                // ------------------------------------------------
+                // IDEMPOTENT CHECK
+                // ------------------------------------------------
+
                 if (
-                    fresh.status === "approved"
+                    fresh.status ===
+                    "approved"
                 ) {
                     result = {
                         idempotent: true,
@@ -437,19 +572,25 @@ async function approveSubmission({
                 }
 
                 if (
-                    fresh.status !== "pending"
+                    fresh.status !==
+                    "pending"
                 ) {
                     throw new Error(
                         "Submission is no longer pending"
                     );
                 }
 
+                // ------------------------------------------------
+                // LOAD WALLET
+                // ------------------------------------------------
+
                 const freshWallet =
                     await Wallet.findOne({
                         project: projectId,
                         user: fresh.user
-                    })
-                    .session(session);
+                    }).session(
+                        session
+                    );
 
                 if (!freshWallet) {
                     throw new Error(
@@ -457,35 +598,60 @@ async function approveSubmission({
                     );
                 }
 
+                // ------------------------------------------------
+                // CREDIT WALLET
+                // ------------------------------------------------
+
                 freshWallet.balance =
                     Number(
-                        freshWallet.balance || 0
+                        freshWallet.balance ||
+                            0
                     ) + amount;
 
                 freshWallet.totalEarned =
                     Number(
-                        freshWallet.totalEarned || 0
+                        freshWallet.totalEarned ||
+                            0
                     ) + amount;
 
                 await freshWallet.save({
                     session
                 });
 
+                // ------------------------------------------------
+                // CREATE TRANSACTION
+                // ------------------------------------------------
+
                 const transactions =
                     await Transaction.create(
-                        [{
-                            project: projectId,
-                            user: fresh.user,
-                            type: "earning",
-                            amount,
-                            description:
-                                `Sponsored task reward: ${task.title}`,
-                            status: "completed"
-                        }],
+                        [
+                            {
+                                project:
+                                    projectId,
+
+                                user:
+                                    fresh.user,
+
+                                type:
+                                    "earning",
+
+                                amount,
+
+                                description:
+                                    `Sponsored task reward: ${task.title}`,
+
+                                status:
+                                    "completed"
+                            }
+                        ],
                         {
                             session
                         }
                     );
+
+                // ------------------------------------------------
+                // UPDATE SUBMISSION
+                // ------------------------------------------------
 
                 fresh.status =
                     "approved";
@@ -506,6 +672,10 @@ async function approveSubmission({
                     session
                 });
 
+                // ------------------------------------------------
+                // UPDATE TASK COMPLETION COUNT
+                // ------------------------------------------------
+
                 await SponsoredTask.updateOne(
                     {
                         _id: task._id,
@@ -521,24 +691,41 @@ async function approveSubmission({
                     }
                 );
 
+                // ------------------------------------------------
+                // USER NOTIFICATION
+                // ------------------------------------------------
+
                 await Notification.create(
-                    [{
-                        project: projectId,
-                        user: fresh.user,
-                        title:
-                            "Sponsored task approved",
-                        message:
-                            `You earned ${amount} ${task.currency} for completing "${task.title}".`,
-                        type: "reward",
-                        read: false
-                    }],
+                    [
+                        {
+                            project:
+                                projectId,
+
+                            user:
+                                fresh.user,
+
+                            title:
+                                "Sponsored task approved",
+
+                            message:
+                                `You earned ${amount} ${task.currency} for completing "${task.title}".`,
+
+                            type:
+                                "reward",
+
+                            read:
+                                false
+                        }
+                    ],
                     {
                         session
                     }
                 );
 
                 result = {
-                    submission: fresh,
+                    submission:
+                        fresh,
+
                     transaction:
                         transactions[0]
                 };
@@ -579,7 +766,10 @@ async function rejectSubmission({
         throw error;
     }
 
-    if (submission.status !== "pending") {
+    if (
+        submission.status !==
+        "pending"
+    ) {
         const error =
             new Error(
                 "Only pending submissions can be rejected"
@@ -596,7 +786,7 @@ async function rejectSubmission({
     submission.rejectionReason =
         String(
             reason ||
-            "Proof could not be verified"
+                "Proof could not be verified"
         ).trim();
 
     submission.reviewedBy =
@@ -613,14 +803,24 @@ async function rejectSubmission({
             project: projectId
         });
 
+    // --------------------------------------------------------
+    // USER NOTIFICATION
+    // --------------------------------------------------------
+
     await Notification.create({
         project: projectId,
+
         user: submission.user,
+
         title:
             "Sponsored task rejected",
+
         message:
             `Your submission for "${task?.title || "the sponsored task"}" was rejected. ${submission.rejectionReason}`,
-        type: "system",
+
+        type:
+            "system",
+
         read: false
     });
 
@@ -637,24 +837,34 @@ async function getUserHistory({
 }) {
     return SponsoredTaskSubmission.find({
         project: projectId,
+
         user: userId
     })
-    .populate(
-        "task",
-        "title description imageUrl targetUrl platform rewardAmount currency"
-    )
-    .sort({
-        createdAt: -1
-    })
-    .lean();
+        .populate(
+            "task",
+            "title description imageUrl targetUrl platform rewardAmount currency"
+        )
+        .sort({
+            createdAt: -1
+        })
+        .lean();
 }
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
     getProjectId,
     getUserId,
+
     getAvailableTasks,
+
     submitTask,
+
     approveSubmission,
+
     rejectSubmission,
+
     getUserHistory
 };

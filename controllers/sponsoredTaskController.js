@@ -1,238 +1,474 @@
-const SponsoredTask =
-    require("../models/SponsoredTask");
-
-const SponsoredTaskSubmission =
-    require("../models/SponsoredTaskSubmission");
-
-const service =
-    require("../services/sponsoredTaskService");
-
+const SponsoredTask = require("../models/SponsoredTask");
+const SponsoredTaskSubmission = require("../models/SponsoredTaskSubmission");
+const service = require("../services/sponsoredTaskService");
+const fileUploadService = require("../services/fileUploadService");
 
 // ============================================================
 // USER: AVAILABLE TASKS
 // ============================================================
 
-const getTasks =
-    async (req, res) => {
-        try {
-            const projectId =
-                service.getProjectId(req);
+const getTasks = async (req, res) => {
+    try {
+        const projectId = service.getProjectId(req);
+        const userId = service.getUserId(req);
 
-            const userId =
-                service.getUserId(req);
-
-            if (!projectId || !userId) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Project and user are required"
-                });
-            }
-
-            const data =
-                await service.getAvailableTasks({
-                    projectId,
-                    userId
-                });
-
-            return res.json({
-                success: true,
-                data
-            });
-
-        } catch (error) {
-            console.error(
-                "SPONSORED TASK LIST ERROR:",
-                error
-            );
-
-            return res.status(
-                error.statusCode || 500
-            ).json({
+        if (!projectId || !userId) {
+            return res.status(400).json({
                 success: false,
-                message:
-                    error.message
+                message: "Project and user are required"
             });
         }
-    };
 
+        const data = await service.getAvailableTasks({
+            projectId,
+            userId
+        });
+
+        return res.json({
+            success: true,
+            data
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK LIST ERROR:",
+            error
+        );
+
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // USER: TASK DETAILS
 // ============================================================
 
-const getTask =
-    async (req, res) => {
-        try {
-            const task =
-                await SponsoredTask.findOne({
-                    _id: req.params.id,
-                    project:
-                        service.getProjectId(req),
-                    active: true
-                }).lean();
+const getTask = async (req, res) => {
+    try {
+        const task = await SponsoredTask.findOne({
+            _id: req.params.id,
+            project: service.getProjectId(req),
+            active: true
+        }).lean();
 
-            if (!task) {
-                return res.status(404).json({
-                    success: false,
-                    message:
-                        "Sponsored task not found"
-                });
-            }
-
-            return res.json({
-                success: true,
-                data: task
-            });
-
-        } catch (error) {
-            return res.status(
-                error.statusCode || 500
-            ).json({
+        if (!task) {
+            return res.status(404).json({
                 success: false,
-                message:
-                    error.message
+                message: "Sponsored task not found"
             });
         }
-    };
 
+        return res.json({
+            success: true,
+            data: task
+        });
+
+    } catch (error) {
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // USER: SUBMIT PROOF
+//
+// Supports:
+//
+// 1. multipart/form-data
+//    proof
+//    file
+//    image
+//    proofFile
+//
+// 2. application/json
+//    proofUrl
+//    proofImageUrl
+//    imageUrl
+//
+// File upload takes priority over manually supplied URL.
+//
+// Uploaded files are sent to Cloudinary through the global
+// fileUploadService.
 // ============================================================
 
-const submitTask =
-    async (req, res) => {
-        try {
-            const proofUrl =
-                req.body?.proofUrl ||
-                req.body?.proofImageUrl ||
-                req.body?.imageUrl;
+const submitTask = async (req, res) => {
+    let uploadedAsset = null;
 
-            if (!proofUrl) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Proof URL is required"
-                });
-            }
+    try {
+        // --------------------------------------------------------
+        // DIRECT URL SUBMISSION
+        // --------------------------------------------------------
 
-            const submission =
-                await service.submitTask({
-                    projectId:
-                        service.getProjectId(req),
+        const directProofUrl =
+            req.body?.proofUrl ||
+            req.body?.proofImageUrl ||
+            req.body?.imageUrl ||
+            "";
 
-                    userId:
-                        service.getUserId(req),
+        let proofUrl =
+            String(directProofUrl || "").trim();
 
-                    taskId:
-                        req.params.id,
+        let proofMetadata = {};
 
-                    proofUrl,
+        // --------------------------------------------------------
+        // CLOUDINARY FILE UPLOAD
+        // --------------------------------------------------------
 
-                    proofType:
-                        req.body?.proofType ||
-                        "image",
+        if (req.file) {
+            uploadedAsset =
+                await fileUploadService.uploadFile(
+                    req.file,
+                    {
+                        folder:
+                            "earnify/sponsored-tasks/proofs",
 
-                    req
-                });
+                        resourceType: "auto"
+                    }
+                );
 
-            return res.status(201).json({
-                success: true,
-                message:
-                    "Task proof submitted for review",
-                data: submission
-            });
+            proofUrl =
+                uploadedAsset.secureUrl ||
+                uploadedAsset.url ||
+                "";
 
-        } catch (error) {
-            console.error(
-                "SPONSORED TASK SUBMIT ERROR:",
-                error
-            );
+            proofMetadata = {
+                source: "cloudinary",
 
-            return res.status(
-                error.statusCode || 500
-            ).json({
+                cloudinaryPublicId:
+                    uploadedAsset.publicId || "",
+
+                resourceType:
+                    uploadedAsset.resourceType || "",
+
+                format:
+                    uploadedAsset.format || "",
+
+                mimeType:
+                    req.file.mimetype || "",
+
+                bytes:
+                    uploadedAsset.bytes ||
+                    req.file.size ||
+                    0,
+
+                originalFilename:
+                    uploadedAsset.originalFilename ||
+                    req.file.originalname ||
+                    ""
+            };
+        }
+
+        // --------------------------------------------------------
+        // VALIDATE PROOF
+        // --------------------------------------------------------
+
+        if (!proofUrl) {
+            return res.status(400).json({
                 success: false,
                 message:
-                    error.message
+                    "Proof file or proof URL is required"
             });
         }
-    };
 
+        // --------------------------------------------------------
+        // CREATE SUBMISSION
+        // --------------------------------------------------------
+
+        const submission =
+            await service.submitTask({
+                projectId:
+                    service.getProjectId(req),
+
+                userId:
+                    service.getUserId(req),
+
+                taskId:
+                    req.params.id,
+
+                proofUrl,
+
+                proofType:
+                    req.body?.proofType ||
+                    (req.file ? "image" : "url"),
+
+                proofMetadata,
+
+                req
+            });
+
+        // --------------------------------------------------------
+        // SUCCESS
+        // --------------------------------------------------------
+
+        return res.status(201).json({
+            success: true,
+
+            message:
+                "Task proof submitted for review",
+
+            data: submission
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK SUBMIT ERROR:",
+            error
+        );
+
+        // --------------------------------------------------------
+        // CLOUDINARY CLEANUP
+        //
+        // If Cloudinary upload succeeded but MongoDB submission
+        // failed, remove the orphaned Cloudinary asset.
+        // --------------------------------------------------------
+
+        if (
+            uploadedAsset &&
+            uploadedAsset.publicId
+        ) {
+            try {
+                await fileUploadService.deleteFile(
+                    uploadedAsset.publicId,
+                    uploadedAsset.resourceType ||
+                        "image"
+                );
+            } catch (cleanupError) {
+                console.error(
+                    "CLOUDINARY CLEANUP ERROR:",
+                    cleanupError.message
+                );
+            }
+        }
+
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // USER: HISTORY
 // ============================================================
 
-const getHistory =
-    async (req, res) => {
-        try {
-            const data =
-                await service.getUserHistory({
-                    projectId:
-                        service.getProjectId(req),
+const getHistory = async (req, res) => {
+    try {
+        const data =
+            await service.getUserHistory({
+                projectId:
+                    service.getProjectId(req),
 
-                    userId:
-                        service.getUserId(req)
-                });
-
-            return res.json({
-                success: true,
-                data
+                userId:
+                    service.getUserId(req)
             });
 
-        } catch (error) {
-            return res.status(500).json({
+        return res.json({
+            success: true,
+            data
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK HISTORY ERROR:",
+            error
+        );
+
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================================
+// ADMIN: CREATE TASK
+// ============================================================
+
+const createTask = async (req, res) => {
+    try {
+        const {
+            title,
+            description,
+            imageUrl = "",
+            targetUrl,
+            platform = "other",
+            rewardAmount,
+            currency = "NGN",
+            needsProof = true,
+            verificationMode = "manual",
+            maxCompletions = null,
+            startsAt = null,
+            endsAt = null,
+            metadata = {}
+        } = req.body;
+
+        if (
+            !title ||
+            !description ||
+            !targetUrl
+        ) {
+            return res.status(400).json({
                 success: false,
                 message:
-                    error.message
+                    "title, description and targetUrl are required"
             });
         }
-    };
 
+        const reward =
+            Number(rewardAmount);
 
-// ============================================================
-// ADMIN: CREATE
-// ============================================================
+        if (
+            !Number.isFinite(reward) ||
+            reward <= 0
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "rewardAmount must be greater than zero"
+            });
+        }
 
-const createTask =
-    async (req, res) => {
-        try {
-            const {
+        const task =
+            await SponsoredTask.create({
+                project:
+                    req.project._id,
+
                 title,
                 description,
-                imageUrl = "",
+                imageUrl,
                 targetUrl,
-                platform = "other",
-                rewardAmount,
-                currency = "NGN",
-                needsProof = true,
-                verificationMode = "manual",
-                maxCompletions = null,
-                startsAt = null,
-                endsAt = null,
-                metadata = {}
-            } = req.body;
+                platform,
 
+                rewardAmount:
+                    reward,
+
+                currency,
+                needsProof,
+                verificationMode,
+                maxCompletions,
+                startsAt,
+                endsAt,
+                metadata,
+
+                createdBy:
+                    req.user?._id ||
+                    req.user?.id
+            });
+
+        return res.status(201).json({
+            success: true,
+            data: task
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK CREATE ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================================
+// ADMIN: LIST TASKS
+// ============================================================
+
+const adminListTasks = async (req, res) => {
+    try {
+        const tasks =
+            await SponsoredTask.find({
+                project:
+                    req.project._id
+            })
+                .sort({
+                    createdAt: -1
+                })
+                .lean();
+
+        return res.json({
+            success: true,
+            data: tasks
+        });
+
+    } catch (error) {
+        console.error(
+            "ADMIN SPONSORED TASK LIST ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================================
+// ADMIN: UPDATE TASK
+// ============================================================
+
+const updateTask = async (req, res) => {
+    try {
+        const allowed = [
+            "title",
+            "description",
+            "imageUrl",
+            "targetUrl",
+            "platform",
+            "rewardAmount",
+            "currency",
+            "needsProof",
+            "verificationMode",
+            "maxCompletions",
+            "active",
+            "startsAt",
+            "endsAt",
+            "metadata"
+        ];
+
+        const updates = {};
+
+        for (const key of allowed) {
             if (
-                !title ||
-                !description ||
-                !targetUrl
+                req.body[key] !==
+                undefined
             ) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "title, description and targetUrl are required"
-                });
+                updates[key] =
+                    req.body[key];
             }
+        }
 
-            const reward =
-                Number(rewardAmount);
+        if (
+            updates.rewardAmount !==
+            undefined
+        ) {
+            updates.rewardAmount =
+                Number(
+                    updates.rewardAmount
+                );
 
             if (
-                !Number.isFinite(reward) ||
-                reward <= 0
+                !Number.isFinite(
+                    updates.rewardAmount
+                ) ||
+                updates.rewardAmount <= 0
             ) {
                 return res.status(400).json({
                     success: false,
@@ -240,191 +476,75 @@ const createTask =
                         "rewardAmount must be greater than zero"
                 });
             }
-
-            const task =
-                await SponsoredTask.create({
-                    project:
-                        req.project._id,
-
-                    title,
-                    description,
-                    imageUrl,
-                    targetUrl,
-                    platform,
-                    rewardAmount:
-                        reward,
-
-                    currency,
-                    needsProof,
-                    verificationMode,
-                    maxCompletions,
-                    startsAt,
-                    endsAt,
-                    metadata,
-
-                    createdBy:
-                        req.user?._id ||
-                        req.user?.id
-                });
-
-            return res.status(201).json({
-                success: true,
-                data: task
-            });
-
-        } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message:
-                    error.message
-            });
         }
-    };
 
-
-// ============================================================
-// ADMIN: LIST TASKS
-// ============================================================
-
-const adminListTasks =
-    async (req, res) => {
-        try {
-            const tasks =
-                await SponsoredTask.find({
+        const task =
+            await SponsoredTask.findOneAndUpdate(
+                {
+                    _id: req.params.id,
                     project:
                         req.project._id
-                })
-                .sort({
-                    createdAt: -1
-                })
-                .lean();
-
-            return res.json({
-                success: true,
-                data: tasks
-            });
-
-        } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message:
-                    error.message
-            });
-        }
-    };
-
-
-// ============================================================
-// ADMIN: UPDATE
-// ============================================================
-
-const updateTask =
-    async (req, res) => {
-        try {
-            const allowed = [
-                "title",
-                "description",
-                "imageUrl",
-                "targetUrl",
-                "platform",
-                "rewardAmount",
-                "currency",
-                "needsProof",
-                "verificationMode",
-                "maxCompletions",
-                "active",
-                "startsAt",
-                "endsAt",
-                "metadata"
-            ];
-
-            const updates = {};
-
-            for (const key of allowed) {
-                if (
-                    req.body[key] !==
-                    undefined
-                ) {
-                    updates[key] =
-                        req.body[key];
+                },
+                {
+                    $set: updates
+                },
+                {
+                    new: true,
+                    runValidators: true
                 }
-            }
+            );
 
-            if (
-                updates.rewardAmount !==
-                undefined
-            ) {
-                updates.rewardAmount =
-                    Number(
-                        updates.rewardAmount
-                    );
-            }
-
-            const task =
-                await SponsoredTask.findOneAndUpdate(
-                    {
-                        _id: req.params.id,
-                        project:
-                            req.project._id
-                    },
-                    {
-                        $set: updates
-                    },
-                    {
-                        new: true,
-                        runValidators: true
-                    }
-                );
-
-            if (!task) {
-                return res.status(404).json({
-                    success: false,
-                    message:
-                        "Sponsored task not found"
-                });
-            }
-
-            return res.json({
-                success: true,
-                data: task
-            });
-
-        } catch (error) {
-            return res.status(500).json({
+        if (!task) {
+            return res.status(404).json({
                 success: false,
                 message:
-                    error.message
+                    "Sponsored task not found"
             });
         }
-    };
 
+        return res.json({
+            success: true,
+            data: task
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK UPDATE ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // ADMIN: SUBMISSIONS
 // ============================================================
 
-const adminSubmissions =
-    async (req, res) => {
-        try {
-            const query = {
-                project:
-                    req.project._id
-            };
+const adminSubmissions = async (req, res) => {
+    try {
+        const query = {
+            project:
+                req.project._id
+        };
 
-            if (req.query.status) {
-                query.status =
-                    req.query.status;
-            }
+        if (req.query.status) {
+            query.status =
+                req.query.status;
+        }
 
-            if (req.query.taskId) {
-                query.task =
-                    req.query.taskId;
-            }
+        if (req.query.taskId) {
+            query.task =
+                req.query.taskId;
+        }
 
-            const submissions =
-                await SponsoredTaskSubmission.find(
-                    query
-                )
+        const submissions =
+            await SponsoredTaskSubmission.find(
+                query
+            )
                 .populate(
                     "task",
                     "title description rewardAmount currency targetUrl platform"
@@ -441,117 +561,123 @@ const adminSubmissions =
                     createdAt: -1
                 });
 
-            return res.json({
-                success: true,
-                data: submissions
-            });
+        return res.json({
+            success: true,
+            data: submissions
+        });
 
-        } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message:
-                    error.message
-            });
-        }
-    };
+    } catch (error) {
+        console.error(
+            "ADMIN SPONSORED TASK SUBMISSIONS ERROR:",
+            error
+        );
 
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // ADMIN: APPROVE
 // ============================================================
 
-const approveSubmission =
-    async (req, res) => {
-        try {
-            const result =
-                await service.approveSubmission({
-                    projectId:
-                        req.project._id,
+const approveSubmission = async (req, res) => {
+    try {
+        const result =
+            await service.approveSubmission({
+                projectId:
+                    req.project._id,
 
-                    submissionId:
-                        req.params.id,
+                submissionId:
+                    req.params.id,
 
-                    adminUserId:
-                        req.user?._id ||
-                        req.user?.id,
+                adminUserId:
+                    req.user?._id ||
+                    req.user?.id,
 
-                    reviewNote:
-                        req.body?.reviewNote ||
-                        ""
-                });
-
-            return res.json({
-                success: true,
-                data: result
+                reviewNote:
+                    req.body?.reviewNote ||
+                    ""
             });
 
-        } catch (error) {
-            console.error(
-                "SPONSORED TASK APPROVE ERROR:",
-                error
-            );
+        return res.json({
+            success: true,
+            data: result
+        });
 
-            return res.status(
-                error.statusCode || 500
-            ).json({
-                success: false,
-                message:
-                    error.message
-            });
-        }
-    };
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK APPROVE ERROR:",
+            error
+        );
 
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 
 // ============================================================
 // ADMIN: REJECT
 // ============================================================
 
-const rejectSubmission =
-    async (req, res) => {
-        try {
-            const reason =
-                req.body?.reason ||
-                req.body?.rejectionReason;
+const rejectSubmission = async (req, res) => {
+    try {
+        const reason =
+            req.body?.reason ||
+            req.body?.rejectionReason;
 
-            if (!reason) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Rejection reason is required"
-                });
-            }
-
-            const submission =
-                await service.rejectSubmission({
-                    projectId:
-                        req.project._id,
-
-                    submissionId:
-                        req.params.id,
-
-                    adminUserId:
-                        req.user?._id ||
-                        req.user?.id,
-
-                    reason
-                });
-
-            return res.json({
-                success: true,
-                data: submission
-            });
-
-        } catch (error) {
-            return res.status(
-                error.statusCode || 500
-            ).json({
+        if (!reason) {
+            return res.status(400).json({
                 success: false,
                 message:
-                    error.message
+                    "Rejection reason is required"
             });
         }
-    };
 
+        const submission =
+            await service.rejectSubmission({
+                projectId:
+                    req.project._id,
+
+                submissionId:
+                    req.params.id,
+
+                adminUserId:
+                    req.user?._id ||
+                    req.user?.id,
+
+                reason
+            });
+
+        return res.json({
+            success: true,
+            data: submission
+        });
+
+    } catch (error) {
+        console.error(
+            "SPONSORED TASK REJECT ERROR:",
+            error
+        );
+
+        return res.status(
+            error.statusCode || 500
+        ).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
     getTasks,

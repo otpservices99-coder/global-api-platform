@@ -1,42 +1,30 @@
 const express = require("express");
 
-const router = express.Router();
+const router =
+    express.Router();
 
-const protect = require("../middleware/auth");
-const project = require("../middleware/project");
+const protect =
+    require("../middleware/auth");
+
+const project =
+    require("../middleware/project");
+
+const upload =
+    require("../middleware/upload");
 
 const {
     getTasks,
     getTask,
     submitTask,
     getHistory
-} = require("../controllers/sponsoredTaskController");
+} =
+    require("../controllers/sponsoredTaskController");
 
-/**
- * @swagger
- * tags:
- *   - name: Sponsored Tasks
- *     description: User-facing sponsored task and proof submission APIs
- */
 
-/**
- * @swagger
- * /api/v1/sponsored-tasks:
- *   get:
- *     summary: Get available sponsored tasks
- *     description: Returns active sponsored tasks available to the authenticated user for the current project.
- *     tags: [Sponsored Tasks]
- *     security:
- *       - bearerAuth: []
- *         apiKeyAuth: []
- *     responses:
- *       200:
- *         description: Sponsored tasks returned successfully
- *       400:
- *         description: Project and user are required
- *       401:
- *         description: Authentication required
- */
+// ============================================================
+// GET AVAILABLE TASKS
+// ============================================================
+
 router.get(
     "/",
     protect,
@@ -44,22 +32,11 @@ router.get(
     getTasks
 );
 
-/**
- * @swagger
- * /api/v1/sponsored-tasks/history:
- *   get:
- *     summary: Get sponsored task submission history
- *     description: Returns the authenticated user's sponsored task submission history.
- *     tags: [Sponsored Tasks]
- *     security:
- *       - bearerAuth: []
- *         apiKeyAuth: []
- *     responses:
- *       200:
- *         description: Submission history returned successfully
- *       401:
- *         description: Authentication required
- */
+
+// ============================================================
+// GET HISTORY
+// ============================================================
+
 router.get(
     "/history",
     protect,
@@ -67,30 +44,11 @@ router.get(
     getHistory
 );
 
-/**
- * @swagger
- * /api/v1/sponsored-tasks/{id}:
- *   get:
- *     summary: Get sponsored task details
- *     tags: [Sponsored Tasks]
- *     security:
- *       - bearerAuth: []
- *         apiKeyAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Sponsored task ID
- *     responses:
- *       200:
- *         description: Sponsored task returned successfully
- *       404:
- *         description: Sponsored task not found
- *       401:
- *         description: Authentication required
- */
+
+// ============================================================
+// GET TASK
+// ============================================================
+
 router.get(
     "/:id",
     protect,
@@ -98,60 +56,73 @@ router.get(
     getTask
 );
 
-/**
- * @swagger
- * /api/v1/sponsored-tasks/{id}/submit:
- *   post:
- *     summary: Submit proof for a sponsored task
- *     description: Submits proof for admin review. The backend records the submission, attempt number, fraud information and proof metadata.
- *     tags: [Sponsored Tasks]
- *     security:
- *       - bearerAuth: []
- *         apiKeyAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Sponsored task ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - proofUrl
- *             properties:
- *               proofUrl:
- *                 type: string
- *                 description: URL of the submitted proof image/file
- *                 example: https://example.com/proof.png
- *               proofImageUrl:
- *                 type: string
- *                 description: Alternative accepted proof URL field
- *               imageUrl:
- *                 type: string
- *                 description: Alternative accepted proof URL field
- *               proofType:
- *                 type: string
- *                 enum: [image, url, text, other]
- *                 default: image
- *                 example: image
- *     responses:
- *       201:
- *         description: Proof submitted for admin review
- *       400:
- *         description: Proof URL is required
- *       401:
- *         description: Authentication required
- */
+
+// ============================================================
+// SUBMIT PROOF
+//
+// Accepts:
+//
+// multipart/form-data:
+//   proof=<file>
+//
+// Also accepts:
+//   file=<file>
+//   image=<file>
+//   proofFile=<file>
+//
+// JSON URL submission remains supported.
+//
+// Multer keeps the file in memory, then the controller sends
+// the buffer through the global fileUploadService.
+// ============================================================
+
 router.post(
     "/:id/submit",
     protect,
     project,
+
+    upload.fields([
+        {
+            name: "proof",
+            maxCount: 1
+        },
+        {
+            name: "file",
+            maxCount: 1
+        },
+        {
+            name: "image",
+            maxCount: 1
+        },
+        {
+            name: "proofFile",
+            maxCount: 1
+        }
+    ]),
+
+    (req, res, next) => {
+        try {
+            const fields =
+                req.files || {};
+
+            const file =
+                fields.proof?.[0] ||
+                fields.file?.[0] ||
+                fields.image?.[0] ||
+                fields.proofFile?.[0] ||
+                null;
+
+            req.file = file;
+
+            return next();
+
+        } catch (error) {
+            return next(error);
+        }
+    },
+
     submitTask
 );
+
 
 module.exports = router;
