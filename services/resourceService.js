@@ -531,48 +531,84 @@ async function getResourceOrDiscoverModel({
         return null;
     }
 
-    // ------------------------------------------------------------
-    // FIRST: configured Resource registry
-    // ------------------------------------------------------------
+    const requestedResource = String(resource).trim();
 
-    const configured =
-        await Resource.findOne({
-            project: projectId,
-            name: resource,
-            enabled: true
-        });
+    if (!requestedResource) {
+        return null;
+    }
+
+    // Explicit Resource registry remains authoritative.
+    const configured = await Resource.findOne({
+        project: projectId,
+        name: requestedResource,
+        enabled: true
+    });
 
     if (configured) {
         return configured;
     }
 
-    // ------------------------------------------------------------
-    // SECOND: GLOBAL DYNAMIC MONGOOSE MODEL DISCOVERY
-    // ------------------------------------------------------------
-
-    const Model =
-        findDynamicMongooseModel(
-            resource
-        );
+    // Discover any registered Mongoose model dynamically.
+    const Model = findDynamicMongooseModel(requestedResource);
 
     if (!Model) {
         return null;
     }
 
     console.log(
-        "🌐 GLOBAL DYNAMIC RESOURCE DISCOVERED:",
-        resource,
-        "=>",
+        '🌐 GLOBAL DYNAMIC RESOURCE DISCOVERED:',
+        requestedResource,
+        '=>',
         Model.modelName
     );
 
-    return buildDynamicResourceDocument(
-        projectId,
-        resource,
-        Model
-    );
-}
+    // Automatically register the missing Resource definition.
+    const operations = {
+        create: { operation: 'create' },
+        find: { operation: 'find' },
+        findOne: { operation: 'findOne' },
+        update: { operation: 'update' },
+        delete: { operation: 'delete' },
+        increment: { operation: 'increment' },
+        decrement: { operation: 'decrement' }
+    };
 
+    const resourceDocument = await Resource.findOneAndUpdate(
+        {
+            project: projectId,
+            name: requestedResource
+        },
+        {
+            $setOnInsert: {
+                project: projectId,
+                name: requestedResource,
+                displayName: requestedResource,
+                description: 'Automatically discovered Mongoose resource',
+                enabled: true,
+                settings: {
+                    provider: 'mongoose',
+                    model: Model.modelName,
+                    dynamic: true,
+                    operations
+                }
+            }
+        },
+        {
+            new: true,
+            upsert: true,
+            setDefaultsOnInsert: true
+        }
+    );
+
+    console.log(
+        '✅ GLOBAL RESOURCE REGISTERED:',
+        resourceDocument.name,
+        '=>',
+        Model.modelName
+    );
+
+    return resourceDocument;
+}
 
 // ============================================================
 // VALIDATE DATA
