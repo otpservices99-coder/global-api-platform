@@ -156,40 +156,57 @@ async function getResource(
  * We do NOT hard-code User, Wallet, Withdrawal, etc.
  */
 function resolveConfiguredModel(
-    resourceDocument
-) {
-    const modelName =
-        resourceDocument?.settings?.model;
+      resourceDocument
+  ) {
+      /*
+       * Prefer the configured model when present.
+       * Otherwise allow the existing universal ResourceService
+       * model resolver to discover the Mongoose model dynamically.
+       *
+       * No resource names or action names are hard-coded.
+       */
+      const configuredModel =
+          resourceDocument?.settings?.model;
 
-    if (!modelName) {
-        throw new Error(
-            "Resource does not define settings.model"
-        );
-    }
+      if (configuredModel) {
+          try {
+              return mongoose.model(configuredModel);
+          } catch (error) {
+              throw new Error(
+                  `Configured model '${configuredModel}' is not registered. ` +
+                  `Registered models: ${
+                      mongoose.modelNames().join(", ") || "NONE"
+                  }`
+              );
+          }
+      }
 
-    /*
-     * Model files have already been dynamically loaded.
-     */
-    if (
-        mongoose.modelNames().includes(modelName)
-    ) {
-        return mongoose.model(modelName);
-    }
+      const resourceName =
+          resourceDocument?.name ||
+          resourceDocument?.displayName;
 
-    /*
-     * Try normal Mongoose lookup as a fallback.
-     */
-    try {
-        return mongoose.model(modelName);
-    } catch (error) {
-        throw new Error(
-            `Configured model '${modelName}' is not registered. ` +
-            `Registered models: ${
-                mongoose.modelNames().join(", ") || "NONE"
-            }`
-        );
-    }
-}
+      if (!resourceName) {
+          throw new Error(
+              "Resource does not define a model or resource name"
+          );
+      }
+
+      if (
+          typeof resourceService.resolveModel ===
+          "function"
+      ) {
+          const Model =
+              resourceService.resolveModel(resourceName);
+
+          if (Model) {
+              return Model;
+          }
+      }
+
+      throw new Error(
+          `Unable to dynamically resolve model for resource '${resourceName}'`
+      );
+  }
 
 /*
  * ============================================================
@@ -256,8 +273,11 @@ function getRequiredFields(model) {
  */
 
 async function certifyConfiguration(
-    actions
+    actions,
+    projectId
 ) {
+    console.log("");
+
     console.log(
         "============================================================"
     );
@@ -283,21 +303,77 @@ async function certifyConfiguration(
 
     const validActions = [];
 
+    const {
+        has: handlerRegistered
+    } = require("./handlers");
+
     for (const action of actions) {
-        const config =
-            action.config || {};
 
-        const resource =
-            typeof config.resource === "string"
-                ? config.resource.trim()
-                : "";
-
-        const operation =
-            typeof config.operation === "string"
-                ? config.operation.trim()
-                : "";
+        const actionName =
+            action?.name ||
+            action?.action ||
+            action?.key ||
+            "unknown";
 
         try {
+
+            /*
+             * ========================================================
+             * HANDLER ACTION
+             * ========================================================
+             */
+
+            if (action?.type === "handler") {
+
+                const handlerName =
+                    typeof action?.config?.handler === "string"
+                        ? action.config.handler.trim()
+                        : "";
+
+                if (!handlerName) {
+                    throw new Error(
+                        "Handler action does not define config.handler"
+                    );
+                }
+
+                if (!handlerRegistered(handlerName)) {
+                    throw new Error(
+                        `Handler '${handlerName}' is not registered`
+                    );
+                }
+
+                validActions.push({
+                    action,
+                    resourceDocument: null,
+                    model: null,
+                    operationConfig: null,
+                    required: []
+                });
+
+                passed++;
+
+                console.log(
+                    `PASS | ${String(actionName).padEnd(32)} | ` +
+                    `-                | ` +
+                    `-                | ` +
+                    "HANDLER"
+                );
+
+                continue;
+            }
+
+            /*
+             * ========================================================
+             * UNIVERSAL / RESOURCE ACTION
+             * ========================================================
+             */
+
+            const resource =
+                action?.config?.resource;
+
+            const operation =
+                action?.config?.operation;
+
             if (!resource) {
                 throw new Error(
                     "Resource is not configured"
@@ -311,36 +387,74 @@ async function certifyConfiguration(
             }
 
             const resourceDocument =
-                await getResource(resource);
+                await getResource(
+                    resource
+                );
 
             if (!resourceDocument) {
                 throw new Error(
-                    `Resource '${resource}' not found`
+                    `Resource '${resource}' is not configured`
                 );
             }
 
-            const operations =
-                resourceDocument?.settings
-                    ?.operations || {};
+            if (resourceDocument.enabled === false) {
+                throw new Error(
+                    `Resource '${resource}' is disabled`
+                );
+            }
 
-            if (
-                !Object.prototype.hasOwnProperty.call(
+            const settings =
+                resourceDocument.settings || {};
+
+            const provider =
+                String(
+                    settings.provider || "mongoose"
+                ).trim().toLowerCase();
+
+            const operations =
+                settings.operations || {};
+
+            const universalOperation =
+                operation === "view"
+                    ? "findOne"
+                    : operation === "list"
+                        ? "find"
+                        : operation === "get"
+                            ? "findOne"
+                            : operation === "adjust"
+                                ? "atomicAdjust"
+                                : operation;
+
+            const hasConfiguredOperation =
+                Object.prototype.hasOwnProperty.call(
                     operations,
                     operation
-                )
+                );
+
+            const hasUniversalOperation =
+                typeof resourceService[universalOperation] ===
+                "function";
+
+            if (
+                !hasConfiguredOperation &&
+                !hasUniversalOperation
             ) {
                 throw new Error(
-                    `Operation '${operation}' is not configured`
+                    `Operation '${operation}' is not configured or universally supported`
                 );
             }
 
             const model =
-                resolveConfiguredModel(
-                    resourceDocument
-                );
+                provider === "mongoose"
+                    ? resolveConfiguredModel(
+                          resourceDocument
+                      )
+                    : null;
 
             const required =
-                getRequiredFields(model);
+                provider === "mongoose"
+                    ? getRequiredFields(model)
+                    : [];
 
             validActions.push({
                 action,
@@ -354,18 +468,20 @@ async function certifyConfiguration(
             passed++;
 
             console.log(
-                `PASS | ${String(action.name).padEnd(32)} | ` +
+                `PASS | ${String(actionName).padEnd(32)} | ` +
                 `${String(resource).padEnd(16)} | ` +
                 `${String(operation).padEnd(16)} | ` +
-                `UNIVERSAL`
+                "UNIVERSAL"
             );
+
         } catch (error) {
+
             failed++;
 
             console.log(
-                `FAIL | ${String(action.name).padEnd(32)} | ` +
-                `${String(resource || "-").padEnd(16)} | ` +
-                `${String(operation || "-").padEnd(16)} | ` +
+                `FAIL | ${String(actionName).padEnd(32)} | ` +
+                `-                | ` +
+                `-                | ` +
                 `NONE | ${error?.message || error}`
             );
         }
@@ -412,7 +528,7 @@ async function certifyExecution(
     );
 
     console.log(
-        "STATUS | ACTION | RESOURCE | OPERATION | MODEL"
+        "STATUS | ACTION | RESOURCE | OPERATION | EXECUTOR"
     );
 
     console.log(
@@ -422,6 +538,25 @@ async function certifyExecution(
     let passed = 0;
     let failed = 0;
 
+    /*
+     * IMPORTANT
+     *
+     * There are two legitimate execution paths:
+     *
+     * 1. Universal/resource actions
+     *      Action -> Resource -> Operation -> Universal Engine
+     *
+     * 2. Explicit handler actions
+     *      Action -> Handler Registry -> Handler
+     *
+     * Handler actions must NOT be forced through generic
+     * resource/model CRUD validation.
+     */
+
+    const {
+        has: handlerRegistered
+    } = require("./handlers");
+
     for (const item of validActions) {
         const {
             action,
@@ -429,34 +564,130 @@ async function certifyExecution(
             model
         } = item;
 
+        const isHandlerAction =
+            action?.type === "handler";
+
+        const handlerName =
+            typeof action?.config?.handler === "string"
+                ? action.config.handler.trim()
+                : null;
+
         const resource =
-            resourceDocument.name ||
-            resourceDocument.settings?.name ||
-            action.config?.resource;
+            resourceDocument?.name ||
+            resourceDocument?.settings?.name ||
+            action?.config?.resource ||
+            null;
 
         const operation =
-            action.config?.operation;
+            action?.config?.operation ||
+            null;
+
+        const provider =
+            String(
+                resourceDocument?.settings?.provider ||
+                ""
+            ).trim().toLowerCase();
 
         try {
+
             /*
-             * At this layer we verify that the exact resource,
-             * operation and configured model required by the
-             * universal engine are executable/resolvable.
-             *
-             * The engine itself remains untouched.
+             * ========================================================
+             * HANDLER EXECUTOR
+             * ========================================================
              */
-            if (!model) {
+
+            if (isHandlerAction) {
+
+                if (!handlerName) {
+                    throw new Error(
+                        "Handler action does not define config.handler"
+                    );
+                }
+
+                if (!handlerRegistered(handlerName)) {
+                    throw new Error(
+                        `Handler '${handlerName}' is not registered`
+                    );
+                }
+
+                passed++;
+
+                console.log(
+                    `PASS | ${String(action.name).padEnd(32)} | ` +
+                    `${String(resource || "-").padEnd(16)} | ` +
+                    `${String(operation || "-").padEnd(16)} | ` +
+                    "HANDLER"
+                );
+
+                continue;
+            }
+
+            /*
+             * ========================================================
+             * UNIVERSAL / RESOURCE EXECUTOR
+             * ========================================================
+             */
+
+            if (!resource) {
                 throw new Error(
-                    "Mongoose model resolution failed"
+                    "Resource is not configured"
                 );
             }
 
+            if (!operation) {
+                throw new Error(
+                    "Operation is not configured"
+                );
+            }
+
+            if (!resourceDocument) {
+                throw new Error(
+                    `Resource '${resource}' is not configured`
+                );
+            }
+
+            if (resourceDocument.enabled === false) {
+                throw new Error(
+                    `Resource '${resource}' is disabled`
+                );
+            }
+
+            /*
+             * Mongoose resources require a dynamically resolved
+             * registered Mongoose model.
+             */
+
+            if (provider === "mongoose") {
+
+                if (!model) {
+                    throw new Error(
+                        "Mongoose model resolution failed"
+                    );
+                }
+
+                if (
+                    !mongoose
+                        .modelNames()
+                        .includes(model.modelName)
+                ) {
+                    throw new Error(
+                        `Model '${model.modelName}' is not registered`
+                    );
+                }
+            }
+
+            /*
+             * resourceData resources intentionally do not require
+             * a Mongoose model.
+             */
+
             if (
-                !mongoose.modelNames()
-                    .includes(model.modelName)
+                provider !== "mongoose" &&
+                provider !== "resourcedata" &&
+                provider !== "resourceData".toLowerCase()
             ) {
                 throw new Error(
-                    `Model '${model.modelName}' is not registered`
+                    `Unsupported resource provider '${provider}'`
                 );
             }
 
@@ -466,9 +697,11 @@ async function certifyExecution(
                 `PASS | ${String(action.name).padEnd(32)} | ` +
                 `${String(resource).padEnd(16)} | ` +
                 `${String(operation).padEnd(16)} | ` +
-                `${model.modelName}`
+                `${String(provider || "UNIVERSAL").toUpperCase()}`
             );
+
         } catch (error) {
+
             failed++;
 
             console.log(

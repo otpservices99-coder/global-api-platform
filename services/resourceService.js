@@ -36,129 +36,29 @@ async function getResource({
     projectId,
     resource
 }) {
-    if (!projectId) {
-        throw new Error("Project ID is required");
+    if (!projectId || !resource) {
+        return null;
     }
 
-    if (!resource) {
-        throw new Error("Resource is required");
-    }
-
-    const document = await Resource.findOne({
+    /*
+     * PRIMARY RESOURCE RESOLUTION
+     *
+     * Look for an explicitly configured Resource definition.
+     *
+     * Dynamic model discovery is handled by
+     * getResourceOrDiscoverModel(), which calls this function
+     * only for the configured-resource lookup.
+     *
+     * IMPORTANT:
+     * This function must NOT call getResourceOrDiscoverModel()
+     * because that would create resolver recursion.
+     */
+    return await Resource.findOne({
         project: projectId,
         name: resource,
         enabled: true
     });
-
-    return document || null;
 }
-
-
-// ============================================================
-// PROVIDER
-// ============================================================
-
-function getProvider(resourceDocument) {
-    return (
-        resourceDocument?.settings?.provider ||
-        "resourceData"
-    );
-}
-
-
-// ============================================================
-// DYNAMIC MONGOOSE MODEL RESOLVER
-// ============================================================
-
-function getMongooseModel(resourceDocument) {
-    const modelName =
-        resourceDocument?.settings?.model;
-
-    if (
-        typeof modelName !== "string" ||
-        !modelName.trim()
-    ) {
-        throw new Error(
-            `Mongoose resource '${resourceDocument?.name || "unknown"}' has no valid model configured`
-        );
-    }
-
-    const normalizedModelName = modelName.trim();
-
-    if (
-        !/^[A-Za-z0-9_$-]+$/.test(
-            normalizedModelName
-        )
-    ) {
-        throw new Error(
-            `Invalid Mongoose model name '${normalizedModelName}'`
-        );
-    }
-
-    if (
-        mongoose.models &&
-        mongoose.models[normalizedModelName]
-    ) {
-        return mongoose.models[normalizedModelName];
-    }
-
-    const modelPath = path.join(
-        __dirname,
-        "..",
-        "models",
-        `${normalizedModelName}.js`
-    );
-
-    try {
-        require(modelPath);
-    } catch (error) {
-        throw new Error(
-            `Unable to load configured Mongoose model '${normalizedModelName}': ${error.message}`
-        );
-    }
-
-    if (
-        mongoose.models &&
-        mongoose.models[normalizedModelName]
-    ) {
-        return mongoose.models[normalizedModelName];
-    }
-
-    throw new Error(
-        `Configured Mongoose model '${normalizedModelName}' did not register with Mongoose`
-    );
-}
-
-
-// ============================================================
-// RESOLVE STORAGE MODEL
-// ============================================================
-
-function resolveModel(resourceDocument) {
-    const provider =
-        getProvider(resourceDocument);
-
-    if (
-        provider === "mongoose" ||
-        provider === "mongo" ||
-        provider === "mongodb"
-    ) {
-        return {
-            provider: "mongoose",
-            Model: getMongooseModel(resourceDocument)
-        };
-    }
-
-    return {
-        provider: "resourceData",
-        Model: ResourceData
-    };
-}
-
-
-// ============================================================
-// SCHEMA
-// ============================================================
 
 async function getSchema({
     projectId,
@@ -289,6 +189,388 @@ function prepareCreateData(
     }
 
     return output;
+}
+
+
+
+// ============================================================
+// GLOBAL_DYNAMIC_MODEL_RESOLUTION_V2
+// ============================================================
+//
+// GLOBAL RESOURCE RESOLUTION
+//
+// Resource definitions are optional.
+//
+// If a Resource document exists, it remains authoritative.
+//
+// If no Resource document exists, automatically discover a
+// registered Mongoose model by resource name.
+//
+// Examples:
+//
+//   SponsoredTask
+//   sponsoredTask
+//   sponsored-task
+//   sponsored_task
+//
+// can all resolve to a registered SponsoredTask model.
+//
+// This is deliberately generic. There is NO action-specific
+// mapping here.
+//
+// ============================================================
+
+function normalizeDynamicResourceName(value) {
+    return String(value || "")
+        .trim()
+        .replace(/[-_\s]+(.)?/g, (_, ch) =>
+            ch ? String(ch).toUpperCase() : ""
+        )
+        .replace(/^(.)/, (_, ch) => String(ch).toUpperCase());
+}
+
+function findDynamicMongooseModel(resource) {
+    if (!resource) {
+        return null;
+    }
+
+    const mongoose =
+        require("mongoose");
+
+    const requested =
+        String(resource).trim();
+
+    if (!requested) {
+        return null;
+    }
+
+    const names =
+        mongoose.modelNames();
+
+    // ------------------------------------------------------------
+    // Exact model-name match
+    // ------------------------------------------------------------
+
+    const exact =
+        names.find(
+            name =>
+                name === requested
+        );
+
+    if (exact) {
+        return mongoose.model(exact);
+    }
+
+    // ------------------------------------------------------------
+    // Normalized match
+    // ------------------------------------------------------------
+
+    const normalized =
+        normalizeDynamicResourceName(
+            requested
+        );
+
+    const normalizedMatch =
+        names.find(
+            name =>
+                normalizeDynamicResourceName(name) ===
+                normalized
+        );
+
+    if (normalizedMatch) {
+        return mongoose.model(
+            normalizedMatch
+        );
+    }
+
+    // ------------------------------------------------------------
+    // Case-insensitive match
+    // ------------------------------------------------------------
+
+    const lower =
+        requested.toLowerCase();
+
+    const caseMatch =
+        names.find(
+            name =>
+                name.toLowerCase() === lower
+        );
+
+    if (caseMatch) {
+        return mongoose.model(
+            caseMatch
+        );
+    }
+
+    return null;
+}
+
+function buildDynamicResourceDocument(
+    projectId,
+    resource,
+    Model
+) {
+    return {
+        _id: null,
+
+        project:
+            projectId,
+
+        name:
+            resource,
+
+        displayName:
+            resource,
+
+        enabled:
+            true,
+
+        settings: {
+            provider:
+                "mongoose",
+
+            model:
+                Model.modelName,
+
+            dynamic:
+                true,
+
+            operations: {
+                create: {
+                    operation:
+                        "create"
+                },
+
+                find: {
+                    operation:
+                        "find"
+                },
+
+                list: {
+                    operation:
+                        "find"
+                },
+
+                findOne: {
+                    operation:
+                        "findOne"
+                },
+
+                get: {
+                    operation:
+                        "findOne"
+                },
+
+                view: {
+                    operation:
+                        "findOne"
+                },
+
+                update: {
+                    operation:
+                        "update"
+                },
+
+                delete: {
+                    operation:
+                        "delete"
+                },
+
+                remove: {
+                    operation:
+                        "remove"
+                },
+
+                increment: {
+                    operation:
+                        "increment"
+                },
+
+                decrement: {
+                    operation:
+                        "decrement"
+                },
+
+                adjust: {
+                    operation:
+                        "adjust"
+                },
+
+                set: {
+                    operation:
+                        "set"
+                }
+            }
+        }
+    };
+}
+
+// ============================================================
+// UNIVERSAL PROVIDER RESOLVER
+// ============================================================
+//
+// Provider resolution is configuration/discovery driven.
+// No resource-specific mappings belong here.
+// ============================================================
+
+
+// ============================================================
+// UNIVERSAL MONGOOSE MODEL RESOLVER
+// ============================================================
+//
+// Resolves a registered Mongoose model dynamically.
+// There are NO resource-specific mappings here.
+//
+// Resolution order:
+//   1. Exact registered model name
+//   2. Normalized resource/model name
+//
+// ============================================================
+
+
+// ============================================================
+// UNIVERSAL RESOURCE MODEL RESOLVER
+// ============================================================
+//
+// Resolves provider + model entirely from the Resource
+// definition. No resource-specific mapping is allowed.
+//
+// ============================================================
+
+function resolveModel(resourceDocument) {
+    if (!resourceDocument) {
+        return {
+            Model: null,
+            provider: null
+        };
+    }
+
+    const provider = getProvider(resourceDocument);
+
+    if (provider === "mongoose" ||
+        provider === "mongo" ||
+        provider === "mongodb") {
+
+        return {
+            Model: getMongooseModel(resourceDocument),
+            provider: "mongoose"
+        };
+    }
+
+    return {
+        Model: null,
+        provider
+    };
+}
+
+function getMongooseModel(resourceDocument) {
+    if (!resourceDocument) {
+        return null;
+    }
+
+    const settings =
+        resourceDocument.settings &&
+        typeof resourceDocument.settings === "object"
+            ? resourceDocument.settings
+            : {};
+
+    const modelName =
+        settings.model ||
+        resourceDocument.model ||
+        resourceDocument.name;
+
+    if (!modelName || typeof modelName !== "string") {
+        return null;
+    }
+
+    const normalized = modelName.trim();
+
+    if (!normalized) {
+        return null;
+    }
+
+    if (mongoose.models && mongoose.models[normalized]) {
+        return mongoose.models[normalized];
+    }
+
+    const lower = normalized.toLowerCase();
+
+    for (const [name, Model] of Object.entries(mongoose.models || {})) {
+        if (String(name).toLowerCase() === lower) {
+            return Model;
+        }
+    }
+
+    return null;
+}
+
+function getProvider(resourceDocument) {
+    if (!resourceDocument) {
+        return null;
+    }
+
+    const settings =
+        resourceDocument.settings &&
+        typeof resourceDocument.settings === "object"
+            ? resourceDocument.settings
+            : {};
+
+    const provider =
+        settings.provider ||
+        resourceDocument.provider ||
+        "mongoose";
+
+    return String(provider).trim().toLowerCase();
+}
+
+async function getResourceOrDiscoverModel({
+    projectId,
+    resource
+}) {
+    if (!projectId || !resource) {
+        return null;
+    }
+
+    // ------------------------------------------------------------
+    // FIRST: configured Resource registry
+    // ------------------------------------------------------------
+
+    const configured =
+        await Resource.findOne({
+            project: projectId,
+            name: resource,
+            enabled: true
+        });
+
+    if (configured) {
+        return configured;
+    }
+
+    // ------------------------------------------------------------
+    // SECOND: GLOBAL DYNAMIC MONGOOSE MODEL DISCOVERY
+    // ------------------------------------------------------------
+
+    const Model =
+        findDynamicMongooseModel(
+            resource
+        );
+
+    if (!Model) {
+        return null;
+    }
+
+    console.log(
+        "🌐 GLOBAL DYNAMIC RESOURCE DISCOVERED:",
+        resource,
+        "=>",
+        Model.modelName
+    );
+
+    return buildDynamicResourceDocument(
+        projectId,
+        resource,
+        Model
+    );
 }
 
 

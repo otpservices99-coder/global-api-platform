@@ -1101,36 +1101,46 @@ async function resolveOperation({
             resource
         });
 
-    if (!resourceDocument) {
-        return null;
-    }
+    /*
+     * UNIVERSAL DYNAMIC FALLBACK
+     *
+     * If a Resource document exists, first use its configured
+     * operation definition. If that operation is not explicitly
+     * registered, do NOT treat the action as unsupported.
+     *
+     * ResourceService is the universal provider capability layer.
+     * This allows future Mongoose resources/models to execute
+     * supported generic operations without resource registration.
+     */
 
     const operations =
         resourceDocument?.settings?.operations ||
         resourceDocument?.operations ||
         {};
 
-    const requestedOperation = String(operation).trim();
+    const requestedOperation =
+        String(operation).trim();
 
-    // ------------------------------------------------------------
-    // 1. Direct operation match
-    // ------------------------------------------------------------
+    let definition =
+        operations[requestedOperation];
 
-    let definition = operations[requestedOperation];
-    let matchedName = requestedOperation;
+    let matchedName =
+        requestedOperation;
 
-    // ------------------------------------------------------------
-    // 2. Operation alias match
-    //
-    // Example:
-    // resource.operations.credit.operation === "increment"
-    //
-    // This allows an action to request "increment" while the
-    // resource exposes the configured operation as "credit".
-    // ------------------------------------------------------------
-
+    /*
+     * Operation alias:
+     *
+     * Example:
+     *   credit: { operation: "increment" }
+     *
+     * allows an action requesting "increment" to use the
+     * configured "credit" definition.
+     */
     if (!definition) {
-        for (const [name, candidate] of Object.entries(operations)) {
+        for (
+            const [name, candidate]
+            of Object.entries(operations)
+        ) {
             if (
                 candidate &&
                 typeof candidate === "object" &&
@@ -1144,28 +1154,29 @@ async function resolveOperation({
         }
     }
 
+    /*
+     * IMPORTANT:
+     *
+     * Missing explicit configuration is NOT the same thing
+     * as an unsupported operation.
+     *
+     * The execution dispatcher below already supports the
+     * universal ResourceService operations. Therefore return
+     * a dynamic definition when the Resource exists.
+     */
     if (!definition) {
-        return null;
+        definition = {
+            operation: requestedOperation,
+            dynamic: true
+        };
+
+        matchedName = requestedOperation;
     }
 
-    // ------------------------------------------------------------
-    // IMPORTANT:
-    //
-    // Broadcast definitions contain fanout-time templates such as:
-    //
-    //     {{item._id}}
-    //
-    // These MUST NOT be resolved here because the broadcast item does
-    // not exist yet. They are resolved inside the broadcast loop after
-    // source records have been loaded.
-    //
-    // Resolving a broadcast definition here would turn:
-    //
-    //     user: "{{item._id}}"
-    //
-    // into an empty/missing value before the loop starts.
-    // ------------------------------------------------------------
-
+    /*
+     * Broadcast definitions may contain {{item.*}} templates.
+     * Do not resolve those until the broadcast loop has its item.
+     */
     const resolvedDefinition =
         definition === true
             ? {}
@@ -1187,14 +1198,12 @@ async function resolveOperation({
     return {
         resourceDocument,
 
-        // Execute the operation declared by the resource.
         operation:
             resolvedDefinition?.operation ||
             requestedOperation,
 
-        // Keep the resource operation name available for
-        // diagnostics and future dynamic execution.
-        operationName: matchedName,
+        operationName:
+            matchedName,
 
         config:
             mergeObjects(
@@ -1203,7 +1212,6 @@ async function resolveOperation({
             )
     };
 }
-
 // ============================================================================
 // PING / HEALTH
 // ============================================================================
@@ -1439,16 +1447,21 @@ async function executeResourceAction(
         !resolved
     ) {
         // ============================================================
-        // GLOBAL DYNAMIC RESOURCE OPERATION
+        // TRUE UNIVERSAL DYNAMIC RESOURCE OPERATION FALLBACK
         // ============================================================
         //
-        // No configured operation exists for this resource.
+        // If no configured Resource operation exists, the resource
+        // itself can still be discovered dynamically by ResourceService.
         //
-        // Do NOT recursively call executeResourceAction().
-        // Do NOT call an external dispatcher.
+        // This preserves the universal architecture:
         //
-        // The existing generic ResourceService switch below must
-        // execute the requested operation directly.
+        //     resource.operation
+        //          ↓
+        //     ResourceService
+        //          ↓
+        //     Mongoose model
+        //
+        // No resource-specific name is hard-coded here.
         // ============================================================
 
         const dynamicResource =
@@ -1457,34 +1470,103 @@ async function executeResourceAction(
                 resource
             });
 
-        const dynamicTarget =
-            resolveTarget({
-                resourceDocument:
-                    dynamicResource,
-                resource,
-                config: config || {},
-                context
-            });
+        if (!dynamicResource) {
+            throw new Error(
+                `Resource "${resource}" could not be resolved`
+            );
+        }
+
+        const dynamicOperations =
+            dynamicResource?.settings?.operations ||
+            dynamicResource?.operations ||
+            {};
+
+        const requested =
+            String(requestedOperation).trim();
+
+        let definition =
+            dynamicOperations[requested];
+
+        let matchedName =
+            requested;
+
+        // ------------------------------------------------------------
+        // UNIVERSAL OPERATION ALIAS SUPPORT
+        // ------------------------------------------------------------
+        //
+        // Example:
+        //
+        //     credit -> increment
+        //     debit  -> decrement
+        //
+        // This is configuration-driven. No action names are hard-coded.
+        // ------------------------------------------------------------
+
+        if (!definition) {
+            for (
+                const [name, candidate]
+                of Object.entries(dynamicOperations)
+            ) {
+                if (
+                    candidate &&
+                    typeof candidate === "object" &&
+                    String(candidate.operation || "").trim() === requested
+                ) {
+                    definition = candidate;
+                    matchedName = name;
+                    break;
+                }
+            }
+        }
+
+        const definitionConfig =
+            definition &&
+            typeof definition === "object"
+                ? definition
+                : {};
 
         resolved = {
-            operation:
-                requestedOperation,
-
-            config:
-                config || {},
-
             resourceDocument:
                 dynamicResource,
 
+            operation:
+                definitionConfig.operation ||
+                requested,
+
             operationName:
-                requestedOperation,
+                matchedName,
+
+            config:
+                mergeObjects(
+                    definitionConfig,
+                    config || {}
+                ),
 
             dynamic:
                 true
         };
 
-        // Keep the resolved resource available to the normal
-        // execution path below.
+        console.log(
+            "🌐 DYNAMIC RESOURCE OPERATION:",
+            JSON.stringify({
+                resource,
+                requestedOperation:
+                    requested,
+                operation:
+                    resolved.operation,
+                operationName:
+                    resolved.operationName,
+                provider:
+                    dynamicResource?.settings?.provider ||
+                    dynamicResource?.provider ||
+                    null,
+                model:
+                    dynamicResource?.settings?.model ||
+                    dynamicResource?.model ||
+                    null,
+                dynamic: true
+            })
+        );
     }
 
     const actualOperation =
