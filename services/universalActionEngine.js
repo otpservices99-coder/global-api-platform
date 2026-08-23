@@ -1360,7 +1360,11 @@ async function executeResourceAction(
 ) {
 
     const projectId =
-        context.projectId;
+        context.projectId ||
+        context.projectId?._id ||
+        context.project?._id ||
+        context.project?.id ||
+        null;
 
     if (
         !projectId
@@ -1405,7 +1409,7 @@ async function executeResourceAction(
     // Resolve the operation from the resource definition.
     // ------------------------------------------------------------
 
-    const resolved =
+    let resolved =
         await resolveOperation({
 
             projectId,
@@ -1435,47 +1439,53 @@ async function executeResourceAction(
         !resolved
     ) {
         // ============================================================
-        // GLOBAL DYNAMIC RESOURCE OPERATIONS
-        // ============================================================
-        //
-        // If the resource has no configured operation definition,
-        // allow the generic ResourceService operation to execute.
-        //
-        // Existing configured resources remain authoritative because
-        // this branch is reached only when resolveOperation() returns
-        // no configured definition.
-        // ============================================================
-
-        // ============================================================
         // GLOBAL DYNAMIC RESOURCE OPERATION
         // ============================================================
         //
         // No configured operation exists for this resource.
-        // Delegate to the existing generic ResourceService dispatcher.
         //
-        // This supports future resources/operations without adding
-        // action-specific mappings or handlers.
+        // Do NOT recursively call executeResourceAction().
+        // Do NOT call an external dispatcher.
+        //
+        // The existing generic ResourceService switch below must
+        // execute the requested operation directly.
         // ============================================================
 
-        const dynamicResult =
-            await executeResourceAction({
+        const dynamicResource =
+            await resourceService.getResource({
                 projectId,
+                resource
+            });
+
+        const dynamicTarget =
+            resolveTarget({
+                resourceDocument:
+                    dynamicResource,
                 resource,
-                operation: requestedOperation,
-                config,
+                config: config || {},
                 context
             });
 
-        return assertSuccessfulResult(
-            dynamicResult,
-            requestedOperation
-        );
+        resolved = {
+            operation:
+                requestedOperation,
 
-        throw new Error(
-            `Operation '${requestedOperation}' is not configured for resource '${resource}'`
-        );
+            config:
+                config || {},
+
+            resourceDocument:
+                dynamicResource,
+
+            operationName:
+                requestedOperation,
+
+            dynamic:
+                true
+        };
+
+        // Keep the resolved resource available to the normal
+        // execution path below.
     }
-
 
     const actualOperation =
         String(
