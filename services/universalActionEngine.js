@@ -1446,37 +1446,19 @@ async function executeResourceAction(
         // no configured definition.
         // ============================================================
 
-        const dynamicResourceDocument =
-            await getResource({
+        // The resource resolver already verified that the
+        // resource exists. Use the generic ResourceService path
+        // directly; no resource-specific mapping is required.
+        return assertSuccessfulResult(
+            await executeResourceOperation({
                 projectId,
-                resource
-            });
-
-        if (!dynamicResourceDocument) {
-            throw new Error(
-                `Resource '${resource}' not found`
-            );
-        }
-
-        const dynamicOperations =
-            dynamicResourceDocument?.settings?.operations ||
-            dynamicResourceDocument?.operations ||
-            {};
-
-        if (
-            Object.keys(dynamicOperations).length === 0
-        ) {
-            return assertSuccessfulResult(
-                await executeResourceOperation({
-                    projectId,
-                    resource,
-                    operation: requestedOperation,
-                    config,
-                    context
-                }),
-                requestedOperation
-            );
-        }
+                resource,
+                operation: requestedOperation,
+                config,
+                context
+            }),
+            requestedOperation
+        );
 
         throw new Error(
             `Operation '${requestedOperation}' is not configured for resource '${resource}'`
