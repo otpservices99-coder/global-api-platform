@@ -296,60 +296,124 @@ function prepareCreateData(
 // VALIDATE DATA
 // ============================================================
 
+
 async function validateResourceData({
     projectId,
     resourceDocument,
-    data
+    data = {}
 }) {
-    const schema = await getSchema({
-        projectId,
-        resourceId:
-            resourceDocument?._id
-    });
+    if (!projectId) {
+        return {
+            success: false,
+            message: "Project ID is required"
+        };
+    }
 
-    if (!schema) {
+    if (!resourceDocument) {
+        return {
+            success: false,
+            message: "Resource definition is required"
+        };
+    }
+
+    if (
+        !data ||
+        typeof data !== "object" ||
+        Array.isArray(data)
+    ) {
+        return {
+            success: false,
+            message: "Data must be an object"
+        };
+    }
+
+    // ========================================================
+    // GLOBAL DYNAMIC VALIDATION
+    // ========================================================
+    //
+    // A resource may operate without a Schema definition.
+    // In that case arbitrary fields are accepted.
+    //
+    // When a Schema exists, only its configured rules are
+    // enforced. Unknown fields are NOT rejected.
+    //
+    // This keeps validation configuration-driven and avoids
+    // adding code whenever a new resource/action is created.
+    // ========================================================
+
+    let schemaDocument = null;
+
+    try {
+        schemaDocument = await getSchema({
+            projectId,
+            resourceId: resourceDocument._id
+        });
+    } catch (error) {
+        schemaDocument = null;
+    }
+
+    const fields =
+        Array.isArray(schemaDocument?.fields)
+            ? schemaDocument.fields
+            : [];
+
+    // No schema = fully dynamic resource.
+    if (fields.length === 0) {
         return {
             success: true,
             data
         };
     }
 
-    try {
-        const result = await validate(
-            schema,
-            data
-        );
+    // Schema exists = enforce configured rules only.
+    for (const field of fields) {
+        if (!field || !field.name) {
+            continue;
+        }
 
-        if (result === false) {
+        const name = field.name;
+
+        const exists =
+            Object.prototype.hasOwnProperty.call(
+                data,
+                name
+            );
+
+        if (
+            field.required === true &&
+            !exists
+        ) {
             return {
                 success: false,
-                message:
-                    "Resource validation failed"
+                message: name + " is required"
             };
         }
 
         if (
-            result &&
-            typeof result === "object" &&
-            result.success === false
+            exists &&
+            Array.isArray(field.options) &&
+            field.options.length > 0 &&
+            data[name] !== null &&
+            data[name] !== undefined &&
+            !field.options.includes(
+                String(data[name])
+            )
         ) {
-            return result;
+            return {
+                success: false,
+                message:
+                    name +
+                    " must be one of: " +
+                    field.options.join(", ")
+            };
         }
-
-        return {
-            success: true,
-            data
-        };
-    } catch (error) {
-        return {
-            success: false,
-            message:
-                error.message ||
-                "Resource validation failed"
-        };
     }
-}
 
+    return {
+        success: true,
+        data
+    };
+}
 
 // ============================================================
 // CREATE
