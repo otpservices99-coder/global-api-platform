@@ -1882,7 +1882,8 @@ async function atomicAdjust({
 // ============================================================
 
 module.exports = {
-    getResource,
+    getResourceOrDiscoverModel,
+getResource,
     getProvider,
     getMongooseModel,
     resolveModel,

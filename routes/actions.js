@@ -121,7 +121,7 @@ async function resolveConfiguredOperation(
 
 
     const resource =
-        await resourceService.getResource({
+        await resourceService.getResourceOrDiscoverModel({
             projectId,
             resource: normalizedResource
         });
