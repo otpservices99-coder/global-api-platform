@@ -139,19 +139,19 @@ const options = {
         paths: {
             "/api/v1/engine": {
                 post: {
-                    tags: [
-                        "Universal Action Engine"
-                    ],
+                    tags: ["Universal Action Engine"],
 
-                    summary:
-                        "Execute a dynamic action",
+                    summary: "Execute a dynamic action",
 
                     description:
-                        "Executes an enabled Action through the Universal Action Engine. The engine resolves the Action, Resource, and Operation dynamically from database configuration. Resource operations are configuration-driven. Resources can accept arbitrary fields when no restrictive Schema is configured. New actions, resources, operations, and fields can therefore be introduced through configuration without adding action-specific backend code.",
+                        "Universal configuration-driven action execution. The action name is resolved dynamically from MongoDB. The engine resolves the configured Resource and Operation, or invokes a registered Handler action. No action-specific backend switch is required.",
 
                     security: [
                         {
                             ApiKeyAuth: []
+                        },
+                        {
+                            BearerAuth: []
                         }
                     ],
 
@@ -161,55 +161,274 @@ const options = {
                         content: {
                             "application/json": {
                                 schema: {
-                                    $ref:
-                                        "#/components/schemas/UniversalEngineRequest"
+                                    $ref: "#/components/schemas/UniversalEngineRequest"
                                 },
 
                                 examples: {
-                                    dynamicCreate: {
-                                        summary:
-                                            "Create dynamically",
-
+                                    deviceBlock: {
+                                        summary: "Block device",
                                         value: {
-                                            action:
-                                                "dynamic.test",
+                                            action: "device.block",
+                                            data: { id: "DEVICE_ID" }
+                                        }
+                                    },
 
+                                    deviceUnblock: {
+                                        summary: "Unblock device",
+                                        value: {
+                                            action: "device.unblock",
+                                            data: { id: "DEVICE_ID" }
+                                        }
+                                    },
+
+                                    dynamicTest: {
+                                        summary: "Dynamic create",
+                                        value: {
+                                            action: "dynamic.test",
                                             data: {
-                                                title:
-                                                    "Future Dynamic Test",
-
-                                                randomNumber:
-                                                    98765,
-
-                                                customFlag:
-                                                    true,
-
-                                                futureField:
-                                                    "accepted-without-code-change",
-
-                                                completelyNewField:
-                                                    "no-code-change"
+                                                title: "Future Dynamic Test",
+                                                randomNumber: 98765,
+                                                customFlag: true
                                             }
                                         }
                                     },
 
                                     dynamicUpdate: {
-                                        summary:
-                                            "Update dynamically",
-
+                                        summary: "Dynamic update",
                                         value: {
-                                            action:
-                                                "dynamic.update",
-
+                                            action: "dynamic.update",
                                             data: {
-                                                id:
-                                                    "6a8a44b21e3e32d69024a502",
+                                                id: "RESOURCE_ID",
+                                                futureField: "updated-without-code-change"
+                                            }
+                                        }
+                                    },
 
-                                                futureField:
-                                                    "updated-without-code-change",
+                                    fraudFlag: {
+                                        summary: "Flag fraud",
+                                        value: {
+                                            action: "fraud.flag",
+                                            data: { user: "USER_ID" }
+                                        }
+                                    },
 
-                                                anotherNewField:
-                                                    "also-dynamic"
+                                    fraudRemoveFlag: {
+                                        summary: "Remove fraud flag",
+                                        value: {
+                                            action: "fraud.remove_flag",
+                                            data: { user: "USER_ID" }
+                                        }
+                                    },
+
+                                    notificationBroadcast: {
+                                        summary: "Broadcast notification",
+                                        value: {
+                                            action: "notification.broadcast",
+                                            data: {
+                                                title: "Announcement",
+                                                message: "Hello users"
+                                            }
+                                        }
+                                    },
+
+                                    notificationSend: {
+                                        summary: "Send notification",
+                                        value: {
+                                            action: "notification.send",
+                                            data: {
+                                                user: "USER_ID",
+                                                title: "Notification",
+                                                message: "Hello",
+                                                type: "system"
+                                            }
+                                        }
+                                    },
+
+                                    rewardClawback: {
+                                        summary: "Claw back reward",
+                                        value: {
+                                            action: "reward.clawback",
+                                            data: {
+                                                user: "USER_ID",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    rewardGrant: {
+                                        summary: "Grant reward",
+                                        value: {
+                                            action: "reward.grant",
+                                            data: {
+                                                user: "USER_ID",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    systemPing: {
+                                        summary: "System ping",
+                                        value: {
+                                            action: "system.ping",
+                                            data: {}
+                                        }
+                                    },
+
+                                    transactionCreate: {
+                                        summary: "Create transaction",
+                                        value: {
+                                            action: "transaction.create",
+                                            data: {
+                                                user: "USER_ID",
+                                                type: "credit",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    transactionFind: {
+                                        summary: "Find transactions",
+                                        value: {
+                                            action: "transaction.find",
+                                            data: {
+                                                filter: { user: "USER_ID" }
+                                            }
+                                        }
+                                    },
+
+                                    transactionFindOne: {
+                                        summary: "Find one transaction",
+                                        value: {
+                                            action: "transaction.findOne",
+                                            data: {
+                                                filter: { user: "USER_ID" }
+                                            }
+                                        }
+                                    },
+
+                                    userDelete: {
+                                        summary: "Delete user",
+                                        value: {
+                                            action: "user.delete",
+                                            data: { id: "USER_ID" }
+                                        }
+                                    },
+
+                                    userRoleUpdate: {
+                                        summary: "Update user role",
+                                        value: {
+                                            action: "user.role_update",
+                                            data: {
+                                                user: "USER_ID",
+                                                role: "ROLE_ID"
+                                            }
+                                        }
+                                    },
+
+                                    userStatusUpdate: {
+                                        summary: "Update user status",
+                                        value: {
+                                            action: "user.status_update",
+                                            data: {
+                                                user: "USER_ID",
+                                                status: "active"
+                                            }
+                                        }
+                                    },
+
+                                    userUnsuspend: {
+                                        summary: "Unsuspend user",
+                                        value: {
+                                            action: "user.unsuspend",
+                                            data: { user: "USER_ID" }
+                                        }
+                                    },
+
+                                    walletCredit: {
+                                        summary: "Credit wallet",
+                                        value: {
+                                            action: "wallet.credit",
+                                            data: {
+                                                user: "USER_ID",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    walletDebit: {
+                                        summary: "Debit wallet",
+                                        value: {
+                                            action: "wallet.debit",
+                                            data: {
+                                                user: "USER_ID",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    walletEnsure: {
+                                        summary: "Ensure wallet",
+                                        value: {
+                                            action: "wallet.ensure",
+                                            data: { user: "USER_ID" }
+                                        }
+                                    },
+
+                                    walletPendingAdjust: {
+                                        summary: "Adjust pending wallet balance",
+                                        value: {
+                                            action: "wallet.pending_adjust",
+                                            data: {
+                                                user: "USER_ID",
+                                                amount: 1
+                                            }
+                                        }
+                                    },
+
+                                    walletView: {
+                                        summary: "View wallet",
+                                        value: {
+                                            action: "wallet.view",
+                                            data: { user: "USER_ID" }
+                                        }
+                                    },
+
+                                    withdrawalApprove: {
+                                        summary: "Approve withdrawal",
+                                        value: {
+                                            action: "withdrawal.approve",
+                                            data: {
+                                                withdrawalId: "WITHDRAWAL_ID"
+                                            }
+                                        }
+                                    },
+
+                                    withdrawalHold: {
+                                        summary: "Hold withdrawal",
+                                        value: {
+                                            action: "withdrawal.hold",
+                                            data: {
+                                                withdrawalId: "WITHDRAWAL_ID"
+                                            }
+                                        }
+                                    },
+
+                                    withdrawalReject: {
+                                        summary: "Reject withdrawal",
+                                        value: {
+                                            action: "withdrawal.reject",
+                                            data: {
+                                                withdrawalId: "WITHDRAWAL_ID"
+                                            }
+                                        }
+                                    },
+
+                                    withdrawalRequest: {
+                                        summary: "Request withdrawal",
+                                        value: {
+                                            action: "withdrawal.request",
+                                            data: {
+                                                amount: 1
                                             }
                                         }
                                     }
@@ -220,78 +439,73 @@ const options = {
 
                     responses: {
                         "200": {
-                            description:
-                                "Action executed successfully",
-
+                            description: "Action executed successfully",
                             content: {
                                 "application/json": {
                                     schema: {
-                                        $ref:
-                                            "#/components/schemas/UniversalEngineResponse"
+                                        $ref: "#/components/schemas/UniversalEngineResponse"
                                     }
                                 }
                             }
                         },
 
                         "400": {
-                            description:
-                                "Invalid request",
-
+                            description: "Invalid request",
                             content: {
                                 "application/json": {
                                     schema: {
-                                        $ref:
-                                            "#/components/schemas/UniversalEngineError"
+                                        $ref: "#/components/schemas/UniversalEngineError"
+                                    }
+                                }
+                            }
+                        },
+
+                        "401": {
+                            description: "Authentication failed",
+                            content: {
+                                "application/json": {
+                                    schema: {
+                                        $ref: "#/components/schemas/UniversalEngineError"
                                     }
                                 }
                             }
                         },
 
                         "404": {
-                            description:
-                                "Action not found or disabled",
-
+                            description: "Action not found or disabled",
                             content: {
                                 "application/json": {
                                     schema: {
-                                        $ref:
-                                            "#/components/schemas/UniversalEngineError"
+                                        $ref: "#/components/schemas/UniversalEngineError"
                                     }
                                 }
                             }
                         },
 
                         "409": {
-                            description:
-                                "Idempotency conflict or request still processing",
-
+                            description: "Idempotency conflict or request still processing",
                             content: {
                                 "application/json": {
                                     schema: {
-                                        $ref:
-                                            "#/components/schemas/UniversalEngineError"
+                                        $ref: "#/components/schemas/UniversalEngineError"
                                     }
                                 }
                             }
                         },
 
                         "500": {
-                            description:
-                                "Action execution failed",
-
+                            description: "Action execution failed",
                             content: {
                                 "application/json": {
                                     schema: {
-                                        $ref:
-                                            "#/components/schemas/UniversalEngineError"
+                                        $ref: "#/components/schemas/UniversalEngineError"
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
+            }}
     },
 
     apis: [
