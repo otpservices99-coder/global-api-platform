@@ -1446,17 +1446,28 @@ async function executeResourceAction(
         // no configured definition.
         // ============================================================
 
-        // The resource resolver already verified that the
-        // resource exists. Use the generic ResourceService path
-        // directly; no resource-specific mapping is required.
-        return assertSuccessfulResult(
-            await executeResourceOperation({
+        // ============================================================
+        // GLOBAL DYNAMIC RESOURCE OPERATION
+        // ============================================================
+        //
+        // No configured operation exists for this resource.
+        // Delegate to the existing generic ResourceService dispatcher.
+        //
+        // This supports future resources/operations without adding
+        // action-specific mappings or handlers.
+        // ============================================================
+
+        const dynamicResult =
+            await executeResourceAction({
                 projectId,
                 resource,
                 operation: requestedOperation,
                 config,
                 context
-            }),
+            });
+
+        return assertSuccessfulResult(
+            dynamicResult,
             requestedOperation
         );
 
