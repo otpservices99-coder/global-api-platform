@@ -117,6 +117,50 @@ const options = {
                     }
                 },
 
+                AccountSuspendedError: {
+                    type: "object",
+
+                    properties: {
+                        success: {
+                            type: "boolean",
+                            example: false
+                        },
+
+                        code: {
+                            type: "string",
+                            example: "ACCOUNT_SUSPENDED"
+                        },
+
+                        message: {
+                            type: "string",
+                            example:
+                                "Your account is suspended. Contact support."
+                        }
+                    }
+                },
+
+                AccountBlockedError: {
+                    type: "object",
+
+                    properties: {
+                        success: {
+                            type: "boolean",
+                            example: false
+                        },
+
+                        code: {
+                            type: "string",
+                            example: "ACCOUNT_BLOCKED"
+                        },
+
+                        message: {
+                            type: "string",
+                            example:
+                                "Your account is blocked. Contact support."
+                        }
+                    }
+                },
+
                 UniversalEngineError: {
                     type: "object",
 
