@@ -217,7 +217,56 @@ const updateStatus = async(req,res)=>{
     try{
 
 
-        const {status}=req.body;
+        let { status } = req.body;
+
+        status =
+            String(status || "")
+                .trim()
+                .toLowerCase();
+
+        if (status === "banned") {
+            status = "blocked";
+        }
+
+        if (
+            ![
+                "active",
+                "suspended",
+                "blocked"
+            ].includes(status)
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                code: "INVALID_ACCOUNT_STATUS",
+
+                message:
+                    "Status must be active, suspended, or blocked"
+
+            });
+
+        }
+
+
+        const projectId =
+            req.projectId ||
+            req.project?._id ||
+            null;
+
+        if (!projectId) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Target project is required"
+
+            });
+
+        }
 
 
 
@@ -225,7 +274,7 @@ const updateStatus = async(req,res)=>{
 
             _id:req.params.id,
 
-            project:req.project._id
+            project:projectId
 
         });
 
@@ -258,9 +307,9 @@ const updateStatus = async(req,res)=>{
 
         await audit.log({
 
-            project:req.project._id,
+            project:projectId,
 
-            actor:req.user.id,
+            actor:req.user._id,
 
             user:user._id,
 

@@ -5,6 +5,64 @@ const jwt = require("jsonwebtoken");
 const walletService =
     require("../services/walletService");
 
+/*
+ * ============================================================
+ * ACCOUNT STATUS HELPERS
+ * ============================================================
+ */
+
+function normalizeAccountStatus(status) {
+
+    const normalized =
+        String(status || "")
+            .trim()
+            .toLowerCase();
+
+    return normalized === "banned"
+        ? "blocked"
+        : (normalized || "active");
+}
+
+
+function getAccountStatusError(status) {
+
+    const normalized =
+        normalizeAccountStatus(status);
+
+    if (
+        normalized === "suspended"
+    ) {
+
+        return {
+            statusCode: 403,
+            success: false,
+            code: "ACCOUNT_SUSPENDED",
+            message:
+                "Your account is suspended. Contact support."
+        };
+
+    }
+
+
+    if (
+        normalized === "blocked"
+    ) {
+
+        return {
+            statusCode: 403,
+            success: false,
+            code: "ACCOUNT_BLOCKED",
+            message:
+                "Your account is blocked. Contact support."
+        };
+
+    }
+
+
+    return null;
+}
+
+
 const {
     ensureReferralCode,
     applyReferral
@@ -619,6 +677,32 @@ const loginUser = async (req, res) => {
         // JWT
         // ====================================================
 
+        const accountStatusError =
+            getAccountStatusError(
+                user.status
+            );
+
+
+        if (accountStatusError) {
+
+            return res.status(
+                accountStatusError.statusCode
+            ).json({
+
+                success:
+                    accountStatusError.success,
+
+                code:
+                    accountStatusError.code,
+
+                message:
+                    accountStatusError.message
+
+            });
+
+        }
+
+
         const token =
             jwt.sign(
                 {
@@ -718,5 +802,7 @@ const loginUser = async (req, res) => {
 
 module.exports = {
     registerUser,
-    loginUser
+    loginUser,
+    normalizeAccountStatus,
+    getAccountStatusError
 };
