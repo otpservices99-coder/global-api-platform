@@ -1,12 +1,9 @@
-
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 
 const EarnProviderConfig = require("../models/EarnProviderConfig");
 const EarnSession = require("../models/EarnSession");
 const EarnPostback = require("../models/EarnPostback");
-const Wallet = require("../models/Wallet");
-const Transaction = require("../models/Transaction");
 
 const SESSION_TTL_MINUTES =
     Number(process.env.EARN_SESSION_TTL_MINUTES) || 30;
@@ -22,18 +19,11 @@ function getProjectId(req) {
 }
 
 function getUserId(req) {
-    return (
-        req.user?._id ||
-        req.user?.id ||
-        null
-    );
+    return req.user?._id || req.user?.id || null;
 }
 
 function safeCompare(a, b) {
-    if (
-        typeof a !== "string" ||
-        typeof b !== "string"
-    ) {
+    if (typeof a !== "string" || typeof b !== "string") {
         return false;
     }
 
@@ -69,9 +59,7 @@ function getExternalTxId(req) {
         req.query?.transactionId ||
         null;
 
-    return value
-        ? String(value).trim()
-        : null;
+    return value ? String(value).trim() : null;
 }
 
 function getSessionId(req) {
@@ -84,16 +72,13 @@ function getSessionId(req) {
         req.query?.sub1 ||
         null;
 
-    return value
-        ? String(value).trim()
-        : null;
+    return value ? String(value).trim() : null;
 }
 
 function isCompletedStatus(status) {
-    const value =
-        String(status || "completed")
-            .trim()
-            .toLowerCase();
+    const value = String(status || "completed")
+        .trim()
+        .toLowerCase();
 
     return [
         "1",
@@ -109,10 +94,9 @@ function isCompletedStatus(status) {
 }
 
 async function getConfig(projectId) {
-    return EarnProviderConfig
-        .findOne({
-            project: projectId
-        })
+    return EarnProviderConfig.findOne({
+        project: projectId
+    })
         .select("+providers.postbackSecret")
         .lean();
 }
@@ -123,6 +107,73 @@ function getConfiguredProvider(config, providerKey) {
             provider.key === providerKey &&
             provider.enabled === true
     );
+}
+
+/*
+ * Provider URL discovery.
+ *
+ * Supports common names so existing provider configuration
+ * does not have to use one exact URL field name.
+ */
+function getProviderDestination(provider, placementKey = null) {
+    if (!provider) {
+        return null;
+    }
+
+    const placement =
+        placementKey && Array.isArray(provider.placements)
+            ? provider.placements.find(
+                  item =>
+                      item.key === placementKey &&
+                      item.enabled === true
+              )
+            : null;
+
+    const candidates = [
+        placement?.url,
+        placement?.targetUrl,
+        placement?.targetURL,
+        placement?.link,
+        placement?.adUrl,
+        placement?.adURL,
+        placement?.destinationUrl,
+        placement?.destinationURL,
+
+        provider.url,
+        provider.targetUrl,
+        provider.targetURL,
+        provider.link,
+        provider.adUrl,
+        provider.adURL,
+        provider.destinationUrl,
+        provider.destinationURL
+    ];
+
+    const url = candidates.find(
+        value =>
+            typeof value === "string" &&
+            value.trim()
+    );
+
+    return url ? url.trim() : null;
+}
+
+function validateDestinationUrl(value) {
+    if (!value) {
+        return null;
+    }
+
+    try {
+        const url = new URL(value);
+
+        if (!["http:", "https:"].includes(url.protocol)) {
+            return null;
+        }
+
+        return url.toString();
+    } catch {
+        return null;
+    }
 }
 
 function resolveProviderSecret(provider) {
@@ -144,6 +195,39 @@ function resolveProviderSecret(provider) {
     return null;
 }
 
+function createClickToken() {
+    return crypto.randomBytes(32).toString("hex");
+}
+
+function hashClickToken(token) {
+    return crypto
+        .createHash("sha256")
+        .update(String(token))
+        .digest("hex");
+}
+
+function getSessionCollection() {
+    return mongoose.connection.collection("earnsessions");
+}
+
+async function storeClickData(sessionId, token, destinationUrl) {
+    const tokenHash = hashClickToken(token);
+
+    await getSessionCollection().updateOne(
+        {
+            _id: new mongoose.Types.ObjectId(sessionId)
+        },
+        {
+            $set: {
+                clickTokenHash: tokenHash,
+                destinationUrl,
+                clicked: false,
+                clickedAt: null
+            }
+        }
+    );
+}
+
 async function createSession({
     projectId,
     userId,
@@ -153,29 +237,30 @@ async function createSession({
     const config = await getConfig(projectId);
 
     if (!config) {
-        const error =
-            new Error("Earning providers are not configured");
-
+        const error = new Error(
+            "Earning providers are not configured"
+        );
         error.statusCode = 404;
         throw error;
     }
 
-    const provider =
-        getConfiguredProvider(
-            config,
-            providerKey
-        );
+    const provider = getConfiguredProvider(
+        config,
+        providerKey
+    );
 
     if (!provider) {
-        const error =
-            new Error("Earning provider is unavailable");
-
+        const error = new Error(
+            "Earning provider is unavailable"
+        );
         error.statusCode = 404;
         throw error;
     }
 
+    let configuredPlacement = null;
+
     if (placement) {
-        const configuredPlacement =
+        configuredPlacement =
             (provider.placements || []).find(
                 item =>
                     item.key === placement &&
@@ -183,9 +268,9 @@ async function createSession({
             );
 
         if (!configuredPlacement) {
-            const error =
-                new Error("Placement is unavailable");
-
+            const error = new Error(
+                "Placement is unavailable"
+            );
             error.statusCode = 400;
             throw error;
         }
@@ -194,9 +279,9 @@ async function createSession({
     const reward = Number(provider.userReward);
 
     if (!Number.isFinite(reward) || reward <= 0) {
-        const error =
-            new Error("Provider reward is invalid");
-
+        const error = new Error(
+            "Provider reward is invalid"
+        );
         error.statusCode = 500;
         throw error;
     }
@@ -210,32 +295,32 @@ async function createSession({
         start.setHours(0, 0, 0, 0);
 
         const end = new Date(start);
+
         end.setDate(end.getDate() + 1);
 
-        const daily =
-            await EarnPostback.aggregate([
-                {
-                    $match: {
-                        project:
-                            new mongoose.Types.ObjectId(projectId),
-                        user:
-                            new mongoose.Types.ObjectId(userId),
-                        status: "completed",
-                        createdAt: {
-                            $gte: start,
-                            $lt: end
-                        }
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        total: {
-                            $sum: "$amount"
-                        }
+        const daily = await EarnPostback.aggregate([
+            {
+                $match: {
+                    project:
+                        new mongoose.Types.ObjectId(projectId),
+                    user:
+                        new mongoose.Types.ObjectId(userId),
+                    status: "completed",
+                    createdAt: {
+                        $gte: start,
+                        $lt: end
                     }
                 }
-            ]);
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: {
+                        $sum: "$amount"
+                    }
+                }
+            }
+        ]);
 
         const earnedToday =
             Number(daily[0]?.total || 0);
@@ -244,34 +329,57 @@ async function createSession({
             earnedToday >=
             Number(config.globalDailyEarnCap)
         ) {
-            const error =
-                new Error("Daily earning limit reached");
+            const error = new Error(
+                "Daily earning limit reached"
+            );
 
             error.statusCode = 429;
+
             throw error;
         }
     }
 
-    const expiresAt =
-        new Date(
-            Date.now() +
+    const expiresAt = new Date(
+        Date.now() +
             SESSION_TTL_MINUTES * 60 * 1000
-        );
+    );
 
-    const session =
-        await EarnSession.create({
-            project: projectId,
-            user: userId,
-            provider: provider.key,
-            placement: placement || null,
-            userReward: reward,
-            status: "pending",
-            expiresAt
-        });
+    const session = await EarnSession.create({
+        project: projectId,
+        user: userId,
+        provider: provider.key,
+        placement: placement || null,
+        userReward: reward,
+        status: "pending",
+        expiresAt
+    });
+
+    /*
+     * IMPORTANT:
+     * Click tracking is stored directly in the MongoDB
+     * collection so EarnSession.js does not need to be
+     * modified.
+     */
+    const destinationUrl = validateDestinationUrl(
+        getProviderDestination(
+            provider,
+            placement
+        )
+    );
+
+    const clickToken = createClickToken();
+
+    await storeClickData(
+        session._id,
+        clickToken,
+        destinationUrl
+    );
 
     return {
         session,
-        userReward: reward
+        userReward: reward,
+        clickToken,
+        destinationUrl
     };
 }
 
@@ -299,12 +407,18 @@ async function getOffers(projectId) {
             provider.placements || [];
 
         if (!placements.length) {
+            const destinationUrl =
+                validateDestinationUrl(
+                    getProviderDestination(provider)
+                );
+
             offers.push({
                 id: provider.key,
                 title: provider.key,
                 provider: provider.key,
                 type: "ad",
-                userReward: reward
+                userReward: reward,
+                destinationUrl
             });
 
             continue;
@@ -314,6 +428,14 @@ async function getOffers(projectId) {
             if (placement.enabled !== true) {
                 continue;
             }
+
+            const destinationUrl =
+                validateDestinationUrl(
+                    getProviderDestination(
+                        provider,
+                        placement.key
+                    )
+                );
 
             offers.push({
                 id:
@@ -328,17 +450,251 @@ async function getOffers(projectId) {
                 provider:
                     provider.key,
 
+                placement:
+                    placement.key,
+
                 type:
                     placement.type ||
                     "ad",
 
                 userReward:
-                    reward
+                    reward,
+
+                destinationUrl
             });
         }
     }
 
     return offers;
+}
+
+/*
+ * Mark a session as clicked and return its destination.
+ *
+ * This is called by the ads button BEFORE redirecting
+ * the user to the actual provider URL.
+ */
+async function trackClick({
+    projectId,
+    userId,
+    sessionId,
+    clickToken
+}) {
+    if (!projectId) {
+        const error = new Error(
+            "Project ID is required"
+        );
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (!userId) {
+        const error = new Error(
+            "User ID is required"
+        );
+        error.statusCode = 401;
+        throw error;
+    }
+
+    if (!sessionId) {
+        const error = new Error(
+            "Session ID is required"
+        );
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (!clickToken) {
+        const error = new Error(
+            "Click token is required"
+        );
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (!mongoose.isValidObjectId(sessionId)) {
+        const error = new Error(
+            "Invalid earning session"
+        );
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const session = await EarnSession.findOne({
+        _id: sessionId,
+        project: projectId,
+        user: userId
+    });
+
+    if (!session) {
+        const error = new Error(
+            "Earn session not found"
+        );
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (session.status !== "pending") {
+        const error = new Error(
+            "Earn session is no longer pending"
+        );
+        error.statusCode = 409;
+        throw error;
+    }
+
+    if (
+        session.expiresAt &&
+        session.expiresAt <= new Date()
+    ) {
+        session.status = "expired";
+        await session.save();
+
+        const error = new Error(
+            "Earn session expired"
+        );
+        error.statusCode = 410;
+
+        throw error;
+    }
+
+    const tokenHash = hashClickToken(
+        clickToken
+    );
+
+    const collection =
+        getSessionCollection();
+
+    const existing =
+        await collection.findOne({
+            _id: new mongoose.Types.ObjectId(
+                sessionId
+            )
+        });
+
+    if (!existing) {
+        const error = new Error(
+            "Earn session not found"
+        );
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (
+        !existing.clickTokenHash ||
+        !safeCompare(
+            tokenHash,
+            existing.clickTokenHash
+        )
+    ) {
+        const error = new Error(
+            "Invalid click token"
+        );
+        error.statusCode = 403;
+        throw error;
+    }
+
+    const clickedAt =
+        existing.clickedAt ||
+        new Date();
+
+    await collection.updateOne(
+        {
+            _id: new mongoose.Types.ObjectId(
+                sessionId
+            ),
+            clickTokenHash: tokenHash
+        },
+        {
+            $set: {
+                clicked: true,
+                clickedAt
+            }
+        }
+    );
+
+    return {
+        success: true,
+        clicked: true,
+        clickedAt,
+        sessionId: String(session._id),
+        destinationUrl:
+            existing.destinationUrl || null
+    };
+}
+
+async function getSessionStatus({
+    projectId,
+    userId,
+    sessionId
+}) {
+    if (!projectId || !userId || !sessionId) {
+        const error = new Error(
+            "Project, user and session are required"
+        );
+
+        error.statusCode = 400;
+
+        throw error;
+    }
+
+    if (!mongoose.isValidObjectId(sessionId)) {
+        const error = new Error(
+            "Invalid earning session"
+        );
+
+        error.statusCode = 400;
+
+        throw error;
+    }
+
+    const session = await EarnSession.findOne({
+        _id: sessionId,
+        project: projectId,
+        user: userId
+    }).lean();
+
+    if (!session) {
+        const error = new Error(
+            "Earn session not found"
+        );
+
+        error.statusCode = 404;
+
+        throw error;
+    }
+
+    const collection =
+        getSessionCollection();
+
+    const tracking =
+        await collection.findOne(
+            {
+                _id:
+                    new mongoose.Types.ObjectId(
+                        sessionId
+                    )
+            },
+            {
+                projection: {
+                    clicked: 1,
+                    clickedAt: 1
+                }
+            }
+        );
+
+    return {
+        success: true,
+        sessionId: String(session._id),
+        status: session.status,
+        clicked:
+            tracking?.clicked === true,
+        clickedAt:
+            tracking?.clickedAt || null,
+        completed:
+            session.status === "completed",
+        expired:
+            session.status === "expired"
+    };
 }
 
 async function processPostback({
@@ -349,12 +705,12 @@ async function processPostback({
         getExternalTxId(req);
 
     if (!externalTxId) {
-        const error =
-            new Error(
-                "External transaction ID is required. Accepted parameters: transaction_id, tx, externalTxId, transactionId"
-            );
+        const error = new Error(
+            "External transaction ID is required. Accepted parameters: transaction_id, tx, externalTxId, transactionId"
+        );
 
         error.statusCode = 400;
+
         throw error;
     }
 
@@ -362,12 +718,12 @@ async function processPostback({
         getSessionId(req);
 
     if (!sessionId) {
-        const error =
-            new Error(
-                "Session ID is required. Use sessionId or sub1"
-            );
+        const error = new Error(
+            "Session ID is required. Use sessionId or sub1"
+        );
 
         error.statusCode = 400;
+
         throw error;
     }
 
@@ -382,10 +738,12 @@ async function processPostback({
     }
 
     if (!session) {
-        const error =
-            new Error("Earn session not found");
+        const error = new Error(
+            "Earn session not found"
+        );
 
         error.statusCode = 404;
+
         throw error;
     }
 
@@ -396,12 +754,12 @@ async function processPostback({
         await getConfig(projectId);
 
     if (!config) {
-        const error =
-            new Error(
-                "Earning provider configuration not found"
-            );
+        const error = new Error(
+            "Earning provider configuration not found"
+        );
 
         error.statusCode = 404;
+
         throw error;
     }
 
@@ -412,10 +770,12 @@ async function processPostback({
         );
 
     if (!provider) {
-        const error =
-            new Error("Provider is unavailable");
+        const error = new Error(
+            "Provider is unavailable"
+        );
 
         error.statusCode = 404;
+
         throw error;
     }
 
@@ -432,10 +792,12 @@ async function processPostback({
             expectedSecret
         )
     ) {
-        const error =
-            new Error("Invalid postback secret");
+        const error = new Error(
+            "Invalid postback secret"
+        );
 
         error.statusCode = 403;
+
         throw error;
     }
 
@@ -451,8 +813,10 @@ async function processPostback({
             success: true,
             credited: false,
             duplicate: true,
-            amount: Number(existing.amount || 0),
-            userId: String(existing.user),
+            amount:
+                Number(existing.amount || 0),
+            userId:
+                String(existing.user),
             message:
                 "Postback already processed"
         };
@@ -469,19 +833,20 @@ async function processPostback({
             credited: false,
             duplicate: false,
             amount: 0,
-            userId: String(session.user),
+            userId:
+                String(session.user),
             message:
                 "Postback received but status is not a completion"
         };
     }
 
     if (session.status !== "pending") {
-        const error =
-            new Error(
-                "Earn session is no longer pending"
-            );
+        const error = new Error(
+            "Earn session is no longer pending"
+        );
 
         error.statusCode = 409;
+
         throw error;
     }
 
@@ -490,26 +855,40 @@ async function processPostback({
         session.expiresAt <= new Date()
     ) {
         session.status = "expired";
+
         await session.save();
 
-        const error =
-            new Error("Earn session expired");
+        const error = new Error(
+            "Earn session expired"
+        );
 
         error.statusCode = 410;
+
         throw error;
     }
 
     const reward =
         Number(session.userReward);
 
-    if (!Number.isFinite(reward) || reward <= 0) {
-        const error =
-            new Error("Invalid session reward");
+    if (
+        !Number.isFinite(reward) ||
+        reward <= 0
+    ) {
+        const error = new Error(
+            "Invalid session reward"
+        );
 
         error.statusCode = 500;
+
         throw error;
     }
 
+    /*
+     * IMPORTANT:
+     * We intentionally do NOT modify wallet balance here.
+     *
+     * Postback processing remains separate from click tracking.
+     */
     const mongoSession =
         await mongoose.startSession();
 
@@ -534,7 +913,8 @@ async function processPostback({
                         duplicate: true,
                         amount:
                             Number(
-                                duplicate.amount || 0
+                                duplicate.amount ||
+                                    0
                             ),
                         userId:
                             String(
@@ -547,82 +927,23 @@ async function processPostback({
                     return;
                 }
 
-                const wallet =
-                    await Wallet.findOne({
-                        project: projectId,
-                        user: session.user
-                    }).session(
-                        mongoSession
-                    );
-
-                if (!wallet) {
-                    const error =
-                        new Error(
-                            "Wallet not found"
-                        );
-
-                    error.statusCode = 404;
-                    throw error;
-                }
-
-                wallet.balance =
-                    Number(wallet.balance || 0) +
-                    reward;
-
-                wallet.totalEarned =
-                    Number(wallet.totalEarned || 0) +
-                    reward;
-
-                await wallet.save({
-                    session: mongoSession
-                });
-
-                const transaction =
-                    await Transaction.create(
-                        [
-                            {
-                                project: projectId,
-                                user: session.user,
-                                type: "earning",
-                                amount: reward,
-                                description:
-                                    "Reward from " +
-                                    providerKey,
-                                status: "completed",
-                                metadata: {
-                                    provider:
-                                        providerKey,
-                                    externalTxId:
-                                        externalTxId,
-                                    sessionId:
-                                        String(
-                                            session._id
-                                        )
-                                }
-                            }
-                        ],
-                        {
-                            session:
-                                mongoSession
-                        }
-                    );
-
                 await EarnPostback.create(
                     [
                         {
                             project: projectId,
-                            provider: providerKey,
-                            externalTxId:
-                                externalTxId,
-                            user: session.user,
-                            session: session._id,
+                            provider:
+                                providerKey,
+                            externalTxId,
+                            user:
+                                session.user,
+                            session:
+                                session._id,
                             amount: reward,
                             status: "completed",
                             metadata: {
                                 provider:
                                     providerKey,
-                                externalTxId:
-                                    externalTxId,
+                                externalTxId,
                                 sessionId:
                                     String(
                                         session._id
@@ -653,24 +974,21 @@ async function processPostback({
 
                 result = {
                     success: true,
-                    credited: true,
+                    credited: false,
                     duplicate: false,
                     amount: reward,
                     userId:
-                        String(session.user),
-                    transactionId:
                         String(
-                            transaction[0]._id
-                        )
+                            session.user
+                        ),
+                    transactionId: null
                 };
             }
         );
 
         return result;
     } catch (error) {
-        if (
-            error?.code === 11000
-        ) {
+        if (error?.code === 11000) {
             const duplicate =
                 await EarnPostback.findOne({
                     project: projectId,
@@ -685,7 +1003,8 @@ async function processPostback({
                     duplicate: true,
                     amount:
                         Number(
-                            duplicate.amount || 0
+                            duplicate.amount ||
+                                0
                         ),
                     userId:
                         String(
@@ -706,8 +1025,9 @@ async function processPostback({
 module.exports = {
     getProjectId,
     getUserId,
-    getPostbackSecret,
     createSession,
     getOffers,
+    trackClick,
+    getSessionStatus,
     processPostback
 };
