@@ -43,7 +43,10 @@ function register(name, handler) {
 // LOAD HANDLER FILES DYNAMICALLY
 // ============================================================
 
-function loadHandlers(directory = __dirname) {
+function loadHandlers(directory) {
+    if (!directory) {
+        directory = path.join(process.cwd(), "handlers");
+    }
     const entries = fs.readdirSync(
         directory,
         {
