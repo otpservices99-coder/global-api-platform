@@ -7,8 +7,13 @@ let serverPromise = null;
 async function ensureServer() {
     if (!serverPromise) {
         serverPromise = import("./server.js")
-            .then(({ default: app }) => {
+            .then(async ({ default: app }) => {
+                const { default: connectDB } = await import("./config/database.js");
+
+                await connectDB();
+
                 app.listen(3000);
+
                 return app;
             })
             .catch((error) => {
