@@ -17,11 +17,14 @@ const resolveApiKey = async (key) => {
     |--------------------------------------------------------------------------
     */
 
-    const apiKey = await ApiKey.findOne({
-        key,
-        active: true
-    }).populate("project");
+    console.log("[API KEY] Before MongoDB query");
 
+const apiKey = await ApiKey.findOne({
+    key,
+    active: true
+}).populate("project");
+
+console.log("[API KEY] MongoDB query completed");
 
     if (apiKey) {
 
