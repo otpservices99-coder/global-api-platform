@@ -1,190 +1,69 @@
-// ============================================================
-// GLOBAL HANDLER REGISTRY
-// ============================================================
-//
-// Dynamically discovers handlers from the handlers directory.
-//
-// A handler must export:
-//
-// {
-//     name: "some.action",
-//     execute: async (context) => { ... }
-// }
-//
-// No project-specific handler mappings are hard-coded here.
-// ============================================================
-
-const fs = require("fs");
-const path = require("path");
-
 const registry = new Map();
 
-// ============================================================
-// REGISTER
-// ============================================================
-
 function register(name, handler) {
-    if (
-        !name ||
-        typeof handler !== "function"
-    ) {
-        throw new Error(
-            "Handler name and function are required"
-        );
+    if (!name || typeof handler !== "function") {
+        throw new Error("Handler name and function are required");
     }
 
-    registry.set(
-        String(name),
-        handler
-    );
+    registry.set(String(name), handler);
 }
 
-// ============================================================
-// LOAD HANDLER FILES DYNAMICALLY
-// ============================================================
+function loadHandlers() {
+    const handlerModules = [
+        require("./wallet/credit"),
+        require("./wallet/debit"),
+        require("./wallet/ensure"),
 
-function loadHandlers(directory) {
-    if (!directory) {
-        directory = path.join(process.cwd(), "handlers");
-    }
-    const entries = fs.readdirSync(
-        directory,
-        {
-            withFileTypes: true
-        }
-    );
+        require("./user/statusUpdate"),
+        require("./user/roleUpdate"),
+        require("./user/unsuspend"),
 
-    for (const entry of entries) {
-        const fullPath = path.join(
-            directory,
-            entry.name
-        );
+        require("./withdrawal/approve"),
+        require("./withdrawal/reject"),
+        require("./withdrawal/request"),
 
-        // Never load this registry file again.
-        if (entry.name === "index.js") {
-            continue;
-        }
+        require("./notification/send")
+    ];
 
-        // Recursively scan handler directories.
-        if (entry.isDirectory()) {
-            loadHandlers(fullPath);
-            continue;
-        }
-
-        // Only JavaScript files are handlers.
+    for (const handler of handlerModules) {
         if (
-            !entry.isFile() ||
-            !entry.name.endsWith(".js")
+            handler &&
+            handler.name &&
+            typeof handler.execute === "function"
         ) {
-            continue;
+            register(handler.name, handler.execute);
         }
-
-        let handler;
-
-        try {
-            handler = require(fullPath);
-        } catch (error) {
-            console.error(
-                `Failed to load handler '${fullPath}':`,
-                error
-            );
-            continue;
-        }
-
-        if (
-            !handler ||
-            !handler.name ||
-            typeof handler.execute !== "function"
-        ) {
-            continue;
-        }
-
-        register(
-            handler.name,
-            handler.execute
-        );
     }
 }
-
-// ============================================================
-// HAS
-// ============================================================
 
 function has(name) {
     if (!name) {
         return false;
     }
 
-    if (!registry.size) {
-        loadHandlers();
-    }
-
-    return registry.has(
-        String(name)
-    );
+    return registry.has(String(name));
 }
 
-// ============================================================
-// EXECUTE
-// ============================================================
-
-async function execute(
-    name,
-    context = {}
-) {
+async function execute(name, context = {}) {
     if (!name) {
-        throw new Error(
-            "Handler name is required"
-        );
+        throw new Error("Handler name is required");
     }
 
-    if (!registry.size) {
-        loadHandlers();
-    }
-
-    const handler =
-        registry.get(
-            String(name)
-        );
+    const handler = registry.get(String(name));
 
     if (!handler) {
-        throw new Error(
-            `Handler '${name}' is not registered`
-        );
+        throw new Error(`Handler not found: ${name}`);
     }
 
     return handler(context);
 }
 
-// ============================================================
-// LIST
-// ============================================================
-
-function list() {
-    if (!registry.size) {
-        loadHandlers();
-    }
-
-    return Array.from(
-        registry.keys()
-    );
-}
-
-// ============================================================
-// INITIAL LOAD
-// ============================================================
-
 loadHandlers();
-
-// ============================================================
-// EXPORTS
-// ============================================================
 
 module.exports = {
     register,
-    execute,
-    has,
-    list,
     loadHandlers,
+    has,
+    execute,
     registry
 };
