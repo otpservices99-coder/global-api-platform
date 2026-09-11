@@ -699,44 +699,57 @@ app.use(
 
 
 // ============================================================
-// SERVER
+// SERVER / EXPORT
+// ============================================================
+//
+// Node/Railway:
+//     node server.js
+//
+// Cloudflare Workers:
+//     worker.js imports the Express app.
+//
 // ============================================================
 
-const PORT =
-    process.env.PORT || 3000;
+if (require.main === module) {
 
+    const PORT =
+        process.env.PORT || 3000;
 
-app.listen(
-    PORT,
-    () => {
+    app.listen(
+        PORT,
+        () => {
 
-        console.log(
-            `🚀 Global Platform API running on port ${PORT}`
-        );
+            console.log(
+                `🚀 Global Platform API running on port ${PORT}`
+            );
 
-        console.log(
-            `📚 Swagger: /api-docs`
-        );
+            console.log(
+                `📚 Swagger: /api-docs`
+            );
 
-        console.log(
-            `🌐 Resources: /api/v1/resources`
-        );
+            console.log(
+                `🌐 Resources: /api/v1/resources`
+            );
 
-        console.log(
-            `⚙️ Resource Manager: /api/v1/resource-manager`
-        );
+            console.log(
+                `⚙️ Resource Manager: /api/v1/resource-manager`
+            );
 
-        console.log(
-            `🛡️ Admin Resources: /api/v1/admin/resources`
-        );
+            console.log(
+                `🛡️ Admin Resources: /api/v1/admin/resources`
+            );
 
-        console.log(
-            `🔔 User Notifications: /api/v1/notifications`
-        );
+            console.log(
+                `🔔 User Notifications: /api/v1/notifications`
+            );
 
-        console.log(
-            `⚡ Action Engine: /api/v1/engine`
-        );
+            console.log(
+                `⚡ Action Engine: /api/v1/engine`
+            );
 
-    }
-);
+        }
+    );
+
+}
+
+module.exports = app;
