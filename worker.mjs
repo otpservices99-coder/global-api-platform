@@ -1,5 +1,8 @@
 import { httpServerHandler } from "cloudflare:node";
-import app from "./server.js";
+
+globalThis.__CLOUDFLARE_WORKER__ = true;
+
+const { default: app } = await import("./server.js");
 
 app.listen(3000);
 

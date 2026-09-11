@@ -13,7 +13,10 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 
-const swaggerUi = require("swagger-ui-express");
+const swaggerUi = globalThis.__CLOUDFLARE_WORKER__
+    ? null
+    : require("swagger-ui-express");
+
 const swaggerSpec = require("./config/swagger");
 
 const connectDB = require("./config/database");
@@ -220,11 +223,13 @@ app.get(
     }
 );
 
-app.use(
-    "/api-docs",
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerSpec)
-);
+if (swaggerUi) {
+    app.use(
+        "/api-docs",
+        swaggerUi.serve,
+        swaggerUi.setup(swaggerSpec)
+    );
+}
 
 
 // ============================================================
@@ -305,7 +310,6 @@ app.use(
     "/api/v1/notifications",
     notificationRoute
 );
-
 
 
 app.use(
@@ -706,7 +710,7 @@ app.use(
 //     node server.js
 //
 // Cloudflare Workers:
-//     worker.js imports the Express app.
+//     worker.mjs imports the Express app.
 //
 // ============================================================
 
