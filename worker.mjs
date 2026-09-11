@@ -1,9 +1,28 @@
-import { httpServerHandler } from "cloudflare:node";
+import { handleAsNodeRequest } from "cloudflare:node";
 
 globalThis.__CLOUDFLARE_WORKER__ = true;
 
-const { default: app } = await import("./server.js");
+let serverPromise = null;
 
-app.listen(3000);
+async function ensureServer() {
+    if (!serverPromise) {
+        serverPromise = import("./server.js")
+            .then(({ default: app }) => {
+                app.listen(3000);
+                return app;
+            })
+            .catch((error) => {
+                serverPromise = null;
+                throw error;
+            });
+    }
 
-export default httpServerHandler({ port: 3000 });
+    return serverPromise;
+}
+
+export default {
+    async fetch(request) {
+        await ensureServer();
+        return handleAsNodeRequest(3000, request);
+    }
+};

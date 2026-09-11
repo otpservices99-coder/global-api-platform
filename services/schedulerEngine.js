@@ -1,82 +1,36 @@
-const Job=require("../models/Job");
+const Job = require("../models/Job");
+const pluginEngine = require("./pluginEngine");
 
-const pluginEngine=require("./pluginEngine");
+async function runJobs() {
+    const now = new Date();
 
+    const jobs = await Job.find({
+        enabled: true,
+        nextRun: { $lte: now }
+    });
 
-async function runJobs(){
+    for (const job of jobs) {
+        try {
+            await pluginEngine.execute(
+                { event: { project: job.project } },
+                job.action
+            );
 
-const now=new Date();
+            job.lastRun = new Date();
 
+            if (job.type === "once") {
+                job.enabled = false;
+            }
 
-const jobs=await Job.find({
-
-enabled:true,
-
-nextRun:{
-$lte:now
+            await job.save();
+        } catch (error) {
+            console.log("Job failed:", error.message);
+        }
+    }
 }
 
-});
-
-
-for(const job of jobs){
-
-try{
-
-
-await pluginEngine.execute(
-
-{
-event:{
-project:job.project
-}
-},
-
-job.action
-
-);
-
-
-
-job.lastRun=new Date();
-
-
-if(job.type==="once"){
-
-job.enabled=false;
-
+if (!globalThis.__CLOUDFLARE_WORKER__) {
+    setInterval(runJobs, 60000);
 }
 
-
-await job.save();
-
-
-
-}catch(error){
-
-console.log(
-"Job failed:",
-error.message
-);
-
-}
-
-}
-
-}
-
-
-
-setInterval(
-
-runJobs,
-
-60000
-
-);
-
-
-
-module.exports={
-runJobs
-};
+module.exports = { runJobs };
