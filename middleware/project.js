@@ -181,9 +181,14 @@ const project = async (req, res, next) => {
     } catch (error) {
 
         console.error(
-            "PROJECT MIDDLEWARE ERROR:",
-            error
-        );
+    "PROJECT MIDDLEWARE ERROR:",
+    error?.message || error
+);
+
+console.error(
+    "PROJECT MIDDLEWARE STACK:",
+    error?.stack || error
+);
 
 
         return res.status(500).json({
