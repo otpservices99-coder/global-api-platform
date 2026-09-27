@@ -4,161 +4,126 @@ const Project = require("../models/Project");
 const ApiKey = require("../models/ApiKey");
 
 const resolveApiKey = async (key) => {
+  if (!key) {
+    return null;
+  }
 
-    if (!key) {
-        return null;
-    }
+  /*
+  |--------------------------------------------------------------------------
+  | NEW API KEY SYSTEM
+  |--------------------------------------------------------------------------
+  */
 
+  console.log("[API KEY] Before MongoDB query");
 
-    /*
-    |--------------------------------------------------------------------------
-    | NEW API KEY SYSTEM
-    |--------------------------------------------------------------------------
-    */
-
-    console.log("[API KEY] Before MongoDB query");
-
-const apiKey = await ApiKey.findOne({
+  const apiKey = await ApiKey.findOne({
     key,
     active: true
-}).populate("project");
+  }).populate("project");
 
-console.log("[API KEY] MongoDB query completed");
+  console.log(
+    "[API KEY] MongoDB query completed:",
+    Boolean(apiKey)
+  );
 
-    if (apiKey) {
-
-        /*
-        |--------------------------------------------------------------------------
-        | GLOBAL KEY
-        |--------------------------------------------------------------------------
-        */
-
-        if (apiKey.scope === "global") {
-
-            apiKey.lastUsedAt = new Date();
-
-            await apiKey.save();
-
-            return {
-                project: apiKey.project || null,
-                apiKey,
-                permissions: apiKey.permissions || ["*"],
-                source: "global",
-                global: true
-            };
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | PROJECT KEY
-        |--------------------------------------------------------------------------
-        */
-
-        if (!apiKey.project) {
-            return null;
-        }
-
-
-        if (apiKey.project.status !== "active") {
-            return null;
-        }
-
-
-        apiKey.lastUsedAt = new Date();
-
-        await apiKey.save();
-
-
-        return {
-            project: apiKey.project,
-            apiKey,
-            permissions: apiKey.permissions || ["*"],
-            source: "apiKey",
-            global: false
-        };
-    }
-
-
+  if (apiKey) {
     /*
     |--------------------------------------------------------------------------
-    | LEGACY PROJECT API KEY SYSTEM
+    | GLOBAL KEY
     |--------------------------------------------------------------------------
     */
 
-    const project = await Project.findOne({
-        status: "active",
-
-        apiKeys: {
-            $elemMatch: {
-                key,
-                status: "active"
-            }
-        }
-    });
-
-
-    if (!project) {
-        return null;
+    if (apiKey.scope === "global") {
+      return {
+        project: apiKey.project || null,
+        apiKey,
+        permissions: apiKey.permissions || ["*"],
+        source: "global",
+        global: true
+      };
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | PROJECT KEY
+    |--------------------------------------------------------------------------
+    */
 
-    const legacyKey = project.apiKeys.find(
-        item =>
-            item.key === key &&
-            item.status === "active"
-    );
-
-
-    if (legacyKey) {
-
-        legacyKey.lastUsed = new Date();
-
-        await project.save();
+    if (!apiKey.project) {
+      return null;
     }
 
+    if (apiKey.project.status !== "active") {
+      return null;
+    }
 
     return {
-        project,
-        apiKey: legacyKey || null,
-        permissions: ["*"],
-        source: "legacy",
-        global: false
+      project: apiKey.project,
+      apiKey,
+      permissions: apiKey.permissions || ["*"],
+      source: "apiKey",
+      global: false
     };
-};
+  }
 
+  /*
+  |--------------------------------------------------------------------------
+  | LEGACY PROJECT API KEY SYSTEM
+  |--------------------------------------------------------------------------
+  */
+
+  const project = await Project.findOne({
+    status: "active",
+    apiKeys: {
+      $elemMatch: {
+        key,
+        status: "active"
+      }
+    }
+  });
+
+  if (!project) {
+    return null;
+  }
+
+  const legacyKey = project.apiKeys.find(
+    (item) =>
+      item.key === key &&
+      item.status === "active"
+  );
+
+  return {
+    project,
+    apiKey: legacyKey || null,
+    permissions: ["*"],
+    source: "legacy",
+    global: false
+  };
+};
 
 const generateApiKey = () => {
-
-    return crypto
-        .randomBytes(32)
-        .toString("hex");
-
+  return crypto
+    .randomBytes(32)
+    .toString("hex");
 };
-
 
 const hasPermission = (apiKey, permission) => {
+  if (!apiKey) {
+    return false;
+  }
 
-    if (!apiKey) {
-        return false;
-    }
+  const permissions =
+    apiKey.permissions || ["*"];
 
+  if (permissions.includes("*")) {
+    return true;
+  }
 
-    const permissions =
-        apiKey.permissions || ["*"];
-
-
-    if (permissions.includes("*")) {
-        return true;
-    }
-
-
-    return permissions.includes(permission);
+  return permissions.includes(permission);
 };
 
-
 module.exports = {
-    resolveApiKey,
-    generateApiKey,
-    hasPermission
+  resolveApiKey,
+  generateApiKey,
+  hasPermission
 };
