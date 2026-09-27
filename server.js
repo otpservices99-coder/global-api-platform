@@ -112,6 +112,8 @@ const statsRoute =
 const platformRoute =
     require("./routes/platform");
 
+const healthRoutes = require("./routes/health");
+
 
 // ============================================================
 // GLOBAL RESOURCE SYSTEM
@@ -280,6 +282,9 @@ app.use(
     "/api/v1/postbacks",
     postbackRoutes
 );
+
+
+app.use("/health", healthRoutes);
 
 
 // ============================================================
