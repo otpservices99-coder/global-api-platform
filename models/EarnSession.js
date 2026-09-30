@@ -35,6 +35,46 @@ const earnSessionSchema = new mongoose.Schema(
             min: 0
         },
 
+        // ============================================
+        // AD CLICK / VIEW TRACKING
+        // ============================================
+
+        clickStatus: {
+            type: String,
+            enum: [
+                "not_clicked",
+                "clicked",
+                "returned",
+                "completed",
+                "expired",
+                "cancelled"
+            ],
+            default: "not_clicked",
+            index: true
+        },
+
+        clickedAt: {
+            type: Date,
+            default: null
+        },
+
+        returnedAt: {
+            type: Date,
+            default: null
+        },
+
+        // URL that was opened for this session.
+        // This is for tracking only.
+        adUrl: {
+            type: String,
+            default: null,
+            trim: true
+        },
+
+        // ============================================
+        // EXISTING SESSION STATE
+        // ============================================
+
         status: {
             type: String,
             enum: [
@@ -49,8 +89,7 @@ const earnSessionSchema = new mongoose.Schema(
 
         expiresAt: {
             type: Date,
-            required: true,
-
+            required: true
         },
 
         completedAt: {
@@ -67,6 +106,13 @@ earnSessionSchema.index({
     project: 1,
     user: 1,
     status: 1,
+    createdAt: -1
+});
+
+earnSessionSchema.index({
+    project: 1,
+    user: 1,
+    clickStatus: 1,
     createdAt: -1
 });
 

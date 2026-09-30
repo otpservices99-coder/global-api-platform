@@ -13,7 +13,7 @@ const options = {
 
         servers: [
             {
-                url: "https://global-api-platform-production.up.railway.app",
+                url: "https://global-api-platform.otpservices99.workers.dev",
                 description: "Production"
             },
             {
