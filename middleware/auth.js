@@ -1,28 +1,9 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
-const UserRole = require("../models/UserRole");
+const { ObjectId } = require("mongodb");
 
-
-/*
- * ============================================================
- * ACCOUNT STATUS HELPERS
- * ============================================================
- *
- * These helpers are intentionally centralized here so every
- * protected route receives the same account-status enforcement.
- *
- * Valid application statuses:
- *
- *     active
- *     suspended
- *     blocked
- *
- * Legacy "banned" is treated as "blocked".
- * ============================================================
- */
+const connectDB = require("../config/database");
 
 function normalizeAccountStatus(status) {
-
     const normalized =
         String(status || "")
             .trim()
@@ -35,107 +16,71 @@ function normalizeAccountStatus(status) {
     return normalized || "active";
 }
 
-
 function accountStatusResponse(status) {
-
     const normalized =
         normalizeAccountStatus(status);
 
-    if (
-        normalized === "suspended"
-    ) {
-
+    if (normalized === "suspended") {
         return {
             success: false,
             code: "ACCOUNT_SUSPENDED",
             message:
                 "Your account is suspended. Contact support."
         };
-
     }
 
-
-    if (
-        normalized === "blocked"
-    ) {
-
+    if (normalized === "blocked") {
         return {
             success: false,
             code: "ACCOUNT_BLOCKED",
             message:
                 "Your account is blocked. Contact support."
         };
-
     }
-
 
     return null;
 }
 
+function toObjectId(value) {
+    if (!value) {
+        return null;
+    }
 
-/*
- * ============================================================
- * PROTECT
- * ============================================================
- */
+    if (value instanceof ObjectId) {
+        return value;
+    }
+
+    if (ObjectId.isValid(value)) {
+        return new ObjectId(value);
+    }
+
+    return null;
+}
 
 const protect = async (req, res, next) => {
-
     try {
-
-        let token;
-
-
-        /*
-         * ====================================================
-         * JWT EXTRACTION
-         * ====================================================
-         *
-         * Expected header:
-         *
-         * Authorization: Bearer <JWT>
-         *
-         * Do NOT use the X-API-Key header for user JWT auth.
-         * X-API-Key remains project/API authentication.
-         * ====================================================
-         */
-
         const authorization =
             req.headers.authorization || "";
 
+        let token = null;
 
         if (
             typeof authorization === "string" &&
             /^Bearer\s+/i.test(authorization)
         ) {
-
             token =
                 authorization
                     .replace(/^Bearer\s+/i, "")
                     .trim();
-
         }
-
 
         if (!token) {
-
             return res.status(401).json({
-
                 success: false,
-
                 message:
                     "Not authorized, no token"
-
             });
-
         }
-
-
-        /*
-         * ====================================================
-         * VERIFY JWT
-         * ====================================================
-         */
 
         const decoded =
             jwt.verify(
@@ -143,133 +88,160 @@ const protect = async (req, res, next) => {
                 process.env.JWT_SECRET
             );
 
-
         if (
             !decoded ||
             !decoded.id
         ) {
-
             return res.status(401).json({
-
                 success: false,
-
                 message:
                     "Invalid or expired token"
-
             });
-
         }
 
+        const db = await connectDB();
 
-        /*
-         * ====================================================
-         * LOAD CURRENT USER
-         * ====================================================
-         *
-         * IMPORTANT:
-         *
-         * Status is read from MongoDB every request.
-         *
-         * Therefore an already-issued JWT immediately loses
-         * normal user access after an admin changes the user
-         * status to suspended or blocked.
-         * ====================================================
-         */
+        const userId =
+            toObjectId(decoded.id);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Invalid or expired token"
+            });
+        }
 
         const user =
-            await User.findById(
-                decoded.id
-            )
-            .select("-password");
-
-
-        if (!user) {
-
-            return res.status(401).json({
-
-                success: false,
-
-                message:
-                    "User not found"
-
+            await db.collection("users").findOne({
+                _id: userId
             });
 
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "User not found"
+            });
         }
 
-
-        /*
-         * ====================================================
-         * NORMALIZE LEGACY STATUS
-         * ====================================================
-         */
+        delete user.password;
 
         const accountStatus =
             normalizeAccountStatus(
                 user.status
             );
 
-
-        /*
-         * ====================================================
-         * STAFF BYPASS
-         * ====================================================
-         *
-         * Admin/super_admin accounts must still be able to
-         * manage suspended/blocked users.
-         *
-         * Existing admin middleware remains responsible for
-         * deciding whether the caller is actually authorized
-         * for an admin route.
-         *
-         * platformRole "super_admin" is explicitly allowed.
-         *
-         * "admin" role is handled below through the populated
-         * role assignments.
-         * ====================================================
-         */
-
         const isSuperAdmin =
-            user.platformRole ===
-            "super_admin";
-
+            user.platformRole === "super_admin";
 
         /*
-         * ====================================================
-         * ROLE ASSIGNMENTS
-         * ====================================================
+         * Load role assignments.
+         *
+         * No assignment is valid for ordinary users.
+         * It must NOT cause authentication to fail.
          */
 
         const assignments =
-            await UserRole.find({
+            await db.collection("userroles")
+                .find({
+                    user: userId
+                })
+                .toArray();
 
-                user: user._id,
+        const roleIds =
+            assignments
+                .map(item => item.role)
+                .filter(Boolean)
+                .map(toObjectId)
+                .filter(Boolean);
 
-                project: user.project
+        let roles = [];
 
-            })
-            .populate({
+        if (roleIds.length > 0) {
+            roles =
+                await db.collection("roles")
+                    .find({
+                        _id: {
+                            $in: roleIds
+                        }
+                    })
+                    .toArray();
+        }
 
-                path: "role",
+        /*
+         * Load permissions only when roles exist.
+         */
 
-                populate: {
-                    path: "permissions"
-                }
+        const permissionIds =
+            roles
+                .flatMap(role =>
+                    Array.isArray(role.permissions)
+                        ? role.permissions
+                        : []
+                )
+                .map(toObjectId)
+                .filter(Boolean);
 
-            });
+        let permissions = [];
 
+        if (permissionIds.length > 0) {
+            permissions =
+                await db.collection("permissions")
+                    .find({
+                        _id: {
+                            $in: permissionIds
+                        }
+                    })
+                    .toArray();
+        }
+
+        const permissionMap =
+            new Map(
+                permissions.map(permission => [
+                    String(permission._id),
+                    permission
+                ])
+            );
+
+        const roleMap =
+            new Map(
+                roles.map(role => [
+                    String(role._id),
+                    role
+                ])
+            );
 
         user.roles =
             assignments
-                .map(
-                    assignment =>
-                        assignment.role
-                )
-                .filter(Boolean);
+                .map(assignment => {
+                    const role =
+                        roleMap.get(
+                            String(assignment.role)
+                        );
 
+                    if (!role) {
+                        return null;
+                    }
+
+                    return {
+                        ...role,
+                        permissions:
+                            Array.isArray(role.permissions)
+                                ? role.permissions
+                                    .map(permissionId =>
+                                        permissionMap.get(
+                                            String(permissionId)
+                                        )
+                                    )
+                                    .filter(Boolean)
+                                : []
+                    };
+                })
+                .filter(Boolean);
 
         const isAdminRole =
             user.roles.some(role => {
-
                 const name =
                     String(
                         role.name ||
@@ -286,28 +258,11 @@ const protect = async (req, res, next) => {
                     name === "super_admin" ||
                     name === "superadmin"
                 );
-
             });
-
 
         const isStaff =
             isSuperAdmin ||
             isAdminRole;
-
-
-        /*
-         * ====================================================
-         * ACCOUNT STATUS ENFORCEMENT
-         * ====================================================
-         *
-         * Staff bypass is deliberate.
-         *
-         * A suspended/blocked admin can still enter admin
-         * routes and restore users.
-         *
-         * Normal users are blocked immediately.
-         * ====================================================
-         */
 
         if (
             !isStaff &&
@@ -316,72 +271,42 @@ const protect = async (req, res, next) => {
                 accountStatus === "blocked"
             )
         ) {
-
-            const response =
+            return res.status(403).json(
                 accountStatusResponse(
                     accountStatus
-                );
-
-
-            return res.status(403).json(
-                response
+                )
             );
-
         }
 
-
-        /*
-         * ====================================================
-         * EXPOSE CURRENT USER
-         * ====================================================
-         */
-
         req.user = user;
-
-
-        /*
-         * Keep compatibility with code that reads req.user.id.
-         */
-
-        req.user.id =
-            user._id;
-
-
-        /*
-         * Keep the decoded token available to existing
-         * middleware/controllers without changing contracts.
-         */
-
-        req.auth =
-            decoded;
-
+        req.user.id = user._id;
+        req.auth = decoded;
 
         next();
 
     } catch (error) {
-
         console.error(
             "AUTH MIDDLEWARE ERROR:",
-            error
+            error?.message || error
         );
 
+        console.error(
+            "AUTH MIDDLEWARE STACK:",
+            error?.stack || error
+        );
 
         return res.status(401).json({
-
             success: false,
-
             message:
                 "Invalid or expired token"
-
         });
-
     }
-
 };
 
-
 module.exports = protect;
+
 module.exports.normalizeAccountStatus =
     normalizeAccountStatus;
+
 module.exports.accountStatusResponse =
     accountStatusResponse;

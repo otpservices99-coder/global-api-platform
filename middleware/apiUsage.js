@@ -1,47 +1,42 @@
-const ApiUsage=require("../models/ApiUsage");
+const connectDB = require("../config/database");
 
+module.exports = async (req, res, next) => {
+    try {
+        if (req.project) {
+            const db = await connectDB();
 
-module.exports=async(req,res,next)=>{
+            await db.collection("apiusages").insertOne({
+                project: req.project._id,
 
+                endpoint:
+                    req.originalUrl,
 
-try{
+                method:
+                    req.method,
 
+                ip:
+                    req.ip,
 
-if(req.project){
+                createdAt:
+                    new Date(),
 
+                updatedAt:
+                    new Date()
+            });
+        }
 
-await ApiUsage.create({
+        next();
 
-project:req.project._id,
+    } catch (error) {
+        console.log(
+            "API meter error:",
+            error.message
+        );
 
-endpoint:req.originalUrl,
-
-method:req.method,
-
-ip:req.ip
-
-});
-
-
-}
-
-
-next();
-
-
-}catch(error){
-
-
-console.log(
-"API meter error:",
-error.message
-);
-
-
-next();
-
-
-}
-
-
+        /*
+         * API usage tracking must NEVER break
+         * an otherwise valid API request.
+         */
+        next();
+    }
 };

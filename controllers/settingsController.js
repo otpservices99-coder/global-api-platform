@@ -1,79 +1,85 @@
-const Setting = require("../models/Setting");
+const connectDB = require("../config/database");
 
 
-// Get project settings
-const getSettings = async (req,res)=>{
+// ============================================================
+// GET PROJECT SETTINGS
+// ============================================================
 
-    try{
+const getSettings = async (req, res) => {
+    try {
+        const db = await connectDB();
 
-        let settings = await Setting.findOne({
-            project:req.project._id
-        });
+        const projectId =
+            req.project?._id ||
+            req.project?.id;
 
-
-        if(!settings){
-
-            settings = await Setting.create({
-                project:req.project._id
+        if (!projectId) {
+            return res.status(400).json({
+                success: false,
+                message: "Project context missing"
             });
-
         }
 
+        let settings =
+            await db.collection("settings").findOne({
+                project: projectId
+            });
 
-        res.json({
+        // Preserve the old Mongoose behavior:
+        // create settings automatically when none exist.
+        if (!settings) {
+            const result =
+                await db.collection("settings").insertOne({
+                    project: projectId,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
 
-            success:true,
+            settings =
+                await db.collection("settings").findOne({
+                    _id: result.insertedId
+                });
+        }
 
-            data:settings
-
+        return res.json({
+            success: true,
+            data: settings
         });
 
+    } catch (error) {
+        console.error(
+            "Get settings error:",
+            error
+        );
 
-    }catch(error){
-
-        res.status(500).json({
-
-            success:false,
-
-            message:error.message
-
+        return res.status(500).json({
+            success: false,
+            message: error.message
         });
-
     }
-
 };
 
 
+// ============================================================
+// UPDATE PROJECT SETTINGS
+// ============================================================
 
+const updateSettings = async (req, res) => {
+    try {
+        const db = await connectDB();
 
-// Update project settings
-const updateSettings = async(req,res)=>{
+        const projectId =
+            req.project?._id ||
+            req.project?.id;
 
-    try{
-
-
-        let settings = await Setting.findOne({
-
-            project:req.project._id
-
-        });
-
-
-
-        if(!settings){
-
-            settings = new Setting({
-
-                project:req.project._id
-
+        if (!projectId) {
+            return res.status(400).json({
+                success: false,
+                message: "Project context missing"
             });
-
         }
 
-
-
         const allowed = [
-
             "currency",
             "minimumWithdrawal",
             "referralBonus",
@@ -82,61 +88,60 @@ const updateSettings = async(req,res)=>{
             "siteName",
             "logo",
             "maintenance"
-
         ];
 
+        const updates = {};
 
-
-        allowed.forEach(key=>{
-
-            if(req.body[key] !== undefined){
-
-                settings[key] = req.body[key];
-
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                updates[key] = req.body[key];
             }
+        }
 
+        updates.updatedAt = new Date();
+
+        await db.collection("settings").updateOne(
+            {
+                project: projectId
+            },
+            {
+                $set: updates,
+                $setOnInsert: {
+                    project: projectId,
+                    createdAt: new Date()
+                }
+            },
+            {
+                upsert: true
+            }
+        );
+
+        const settings =
+            await db.collection("settings").findOne({
+                project: projectId
+            });
+
+        return res.json({
+            success: true,
+            message: "Settings updated",
+            data: settings
         });
 
+    } catch (error) {
+        console.error(
+            "Update settings error:",
+            error
+        );
 
-
-        await settings.save();
-
-
-
-        res.json({
-
-            success:true,
-
-            message:"Settings updated",
-
-            data:settings
-
+        return res.status(500).json({
+            success: false,
+            message: error.message
         });
-
-
-
-    }catch(error){
-
-
-        res.status(500).json({
-
-            success:false,
-
-            message:error.message
-
-        });
-
     }
-
-
 };
 
 
-
-module.exports={
-
+module.exports = {
     getSettings,
-
     updateSettings
-
 };
